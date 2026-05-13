@@ -1,0 +1,537 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Advertising Analytics Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
+  <style>
+    :root{
+      --bg:#edf2f6;
+      --bg-soft:#f8fbfd;
+      --bg-deep:#dde7ef;
+      --card:rgba(255,255,255,.72);
+      --card-strong:rgba(255,255,255,.88);
+      --line:rgba(177,193,207,.42);
+      --line-soft:rgba(185,197,210,.28);
+      --text:#22313f;
+      --muted:#738496;
+      --primary:#6b8fb0;
+      --primary-strong:#557999;
+      --primary-soft:#edf4fa;
+      --good:#4f8d74;
+      --good-soft:#eef7f2;
+      --warn:#a67c2e;
+      --warn-soft:#fff8ea;
+      --bad:#b46c6c;
+      --bad-soft:#fff3f2;
+      --radius:28px;
+      --radius-sm:20px;
+      --shadow:0 18px 40px rgba(90,114,136,.10);
+      --shadow-soft:0 8px 18px rgba(112,130,148,.08);
+    }
+    *{box-sizing:border-box}
+    html{scroll-behavior:smooth}
+    body{
+      margin:0;
+      font-family:-apple-system,BlinkMacSystemFont,"SF Pro Display","Segoe UI",Roboto,"Noto Sans KR",Arial,sans-serif;
+      color:var(--text);
+      background:
+        radial-gradient(circle at 12% 8%, rgba(255,255,255,.92) 0%, rgba(255,255,255,0) 28%),
+        radial-gradient(circle at 88% 12%, rgba(255,255,255,.78) 0%, rgba(255,255,255,0) 24%),
+        linear-gradient(180deg, #eff4f8 0%, #e6edf3 48%, #e9eff4 100%);
+      min-height:100vh;
+    }
+    body::before{
+      content:"";
+      position:fixed;
+      inset:0;
+      pointer-events:none;
+      background:linear-gradient(180deg, rgba(255,255,255,.18), rgba(255,255,255,0));
+      z-index:0;
+    }
+    .wrap{position:relative;z-index:1;max-width:1720px;margin:0 auto;padding:26px}
+    .hero,.grid-2,.grid-3,.kpis,.weekly-reports{display:grid;gap:20px}
+    .filters{display:grid;gap:16px;grid-template-columns:repeat(6,minmax(180px,1fr));align-items:stretch;margin-bottom:20px}
+    .hero{grid-template-columns:1.15fr .85fr;margin-bottom:20px}
+    .grid-2{grid-template-columns:1fr 1fr;margin-bottom:20px}
+    .weekly-reports{grid-template-columns:1fr;align-items:stretch;margin-bottom:20px}
+    .imports-layout{grid-template-columns:1fr;align-items:stretch;margin-bottom:20px}
+    .grid-3{grid-template-columns:repeat(3,minmax(0,1fr));margin-bottom:20px}
+        .kpis{grid-template-columns:repeat(9,minmax(0,1fr));margin-bottom:20px}
+    .panel,.kpi,.filter,.modal-card{
+      background:var(--card);
+      border:1px solid var(--line);
+      border-radius:var(--radius);
+      box-shadow:var(--shadow);
+      backdrop-filter:blur(20px) saturate(145%);
+      -webkit-backdrop-filter:blur(20px) saturate(145%);
+    }
+    .panel,.grid-2 > *,.grid-3 > *{min-width:0}
+    .panel{
+      padding:22px;
+      position:relative;
+      overflow:hidden;
+    }
+    .panel::before{
+      content:"";
+      position:absolute;
+      inset:0;
+      pointer-events:none;
+      border-radius:inherit;
+      background:linear-gradient(180deg, rgba(255,255,255,.28), rgba(255,255,255,0) 22%);
+      opacity:.9;
+    }
+    .panel::after{
+      content:"";
+      position:absolute;
+      inset:1px;
+      border-radius:calc(var(--radius) - 1px);
+      border:1px solid rgba(255,255,255,.34);
+      pointer-events:none;
+    }
+    .title{margin:0 0 12px;font-size:34px;font-weight:900;letter-spacing:-.045em}
+    .subtitle{margin:0;color:var(--muted);font-size:13px;line-height:1.8}
+    .chip-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:15px}
+    .chip{
+      display:inline-flex;align-items:center;gap:6px;padding:8px 13px;border-radius:999px;
+      background:rgba(255,255,255,.7);border:1px solid rgba(180,194,206,.34);color:#617487;
+      font-size:12px;font-weight:800;box-shadow:var(--shadow-soft)
+    }
+    .upload-box{
+      min-height:238px;display:flex;flex-direction:column;justify-content:center;gap:12px;
+      border:1.5px dashed rgba(117,145,170,.42);
+      background:linear-gradient(180deg, rgba(255,255,255,.78) 0%, rgba(241,246,250,.9) 100%);
+      position:relative;
+      transition:border-color .18s ease, box-shadow .18s ease, background .18s ease, transform .18s ease
+    }
+    .upload-box.dragover{
+      border-color:var(--primary);
+      background:linear-gradient(180deg, rgba(255,255,255,.92) 0%, rgba(230,240,248,.96) 100%);
+      box-shadow:0 0 0 4px rgba(107,143,176,.10),var(--shadow);
+      transform:translateY(-1px)
+    }
+    .drop-caption{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:13px;color:var(--muted);line-height:1.6}
+    .drop-pill{display:inline-flex;align-items:center;padding:6px 10px;border-radius:999px;background:rgba(107,143,176,.12);color:var(--primary-strong);font-size:11px;font-weight:900}
+    .upload-title{font-size:18px;font-weight:900;margin:0}
+    .actions{display:flex;flex-wrap:nowrap;gap:10px;align-items:center}
+    .actions > .file-label,.actions > button{flex:0 0 auto}
+    button,.file-label,select,input{font:inherit}
+    button,.file-label{
+      border:none;border-radius:16px;padding:11px 14px;cursor:pointer;font-size:14px;font-weight:800;
+      transition:transform .15s ease, box-shadow .15s ease, opacity .15s ease;white-space:nowrap;line-height:1.1
+    }
+    button:hover,.file-label:hover{transform:translateY(-1px)}
+    .primary{background:#111111;color:#ffffff;border:1px solid #111111;box-shadow:0 10px 22px rgba(17,17,17,.18)}
+    .ghost{background:#111111;color:#ffffff;border:1px solid #111111;box-shadow:0 10px 22px rgba(17,17,17,.12)}
+    .danger{background:#fff2f2;color:#8f5050;border:1px solid #eccaca}
+    .inline-btn{padding:8px 10px;font-size:12px;border-radius:12px}
+    input[type=file]{display:none}
+    .status{font-size:13px;color:var(--muted);line-height:1.72}
+    .filter,.kpi{padding:14px 14px;position:relative;overflow:hidden}
+    .filter{display:flex;flex-direction:column;justify-content:flex-start;height:100%;min-height:166px}
+    .filter{min-width:0}
+    .filter.compact-storage{min-width:180px}
+    .filter::before,.kpi::before{
+      content:"";position:absolute;inset:0;pointer-events:none;
+      background:linear-gradient(180deg, rgba(255,255,255,.22), rgba(255,255,255,0));
+    }
+    .filter label,.kpi .label{display:block;font-size:12px;font-weight:800;color:var(--muted);margin-bottom:8px}
+    .filter select,.filter input,.mapping select,.mapping input,.mapping textarea{
+      width:100%;min-height:48px;height:48px;padding:11px 12px;border:1px solid rgba(177,193,207,.55);border-radius:14px;
+      background:rgba(255,255,255,.82);color:var(--text);
+      box-shadow:inset 0 1px 0 rgba(255,255,255,.58)
+    }
+    .filter input[type="date"]{appearance:none;-webkit-appearance:none;line-height:1.2}
+    .filter .hint{margin-top:6px;font-size:11px;color:var(--muted);min-height:2.9em;line-height:1.45}
+    .kpi .value{font-size:clamp(13px,1.08vw,18px);font-weight:900;letter-spacing:-.03em;margin-bottom:6px;line-height:1.08;white-space:normal;overflow:visible;text-overflow:clip;overflow-wrap:anywhere;word-break:break-word}
+    .kpi .sub{color:var(--muted);font-size:12px;line-height:1.48}
+    h2{margin:0 0 10px;font-size:19px;font-weight:900;letter-spacing:-.02em;line-height:1.4;overflow-wrap:anywhere}
+    .small-note{font-size:12px;color:var(--muted);margin-bottom:12px;line-height:1.65}
+    .insight-list{display:flex;flex-direction:column;gap:10px}
+    .insight{padding:14px 15px;border-radius:18px;border:1px solid rgba(177,193,207,.4);font-size:14px;line-height:1.65;box-shadow:var(--shadow-soft)}
+    .good{background:rgba(242,249,245,.92);border-color:#cfe4d7}
+    .warn{background:rgba(255,248,234,.95);border-color:#ecd8a6}
+    .bad{background:rgba(255,242,241,.95);border-color:#eccccc}
+    .table-wrap{
+      height:460px;max-height:460px;max-width:100%;width:100%;overflow:auto;
+      border:1px solid rgba(177,193,207,.42);border-radius:24px;
+      background:linear-gradient(180deg, rgba(255,255,255,.84) 0%, rgba(247,250,252,.98) 100%);
+      -webkit-overflow-scrolling:touch;overscroll-behavior:contain;box-shadow:inset 0 1px 0 rgba(255,255,255,.55)
+    }
+    .weekly-reports .panel,.imports-layout .panel{display:flex;flex-direction:column;min-height:0}
+    .weekly-reports .table-wrap,.imports-layout .table-wrap{flex:1;height:446px;max-height:446px}
+    .weekly-reports .small-note,.imports-layout .small-note{margin-bottom:14px}
+    table{width:max-content;min-width:100%;border-collapse:separate;border-spacing:0;font-size:13px}
+    .table-wrap table td,.table-wrap table th{max-width:none;box-sizing:border-box}
+    .table-wrap table[data-widths-initialized="true"]{table-layout:fixed}
+    .table-wrap table[data-widths-initialized="true"] td,.table-wrap table[data-widths-initialized="true"] th{overflow:hidden;text-overflow:clip}
+
+    th,td{padding:10px 12px;border-bottom:1px solid rgba(185,197,210,.34);vertical-align:middle;white-space:nowrap;overflow:hidden;text-overflow:clip}
+    td{background:rgba(255,255,255,.58);max-width:0}
+    th{max-width:0}
+    .report-table{min-width:1320px}
+    .report-table thead th{background:linear-gradient(180deg,#dfe8ee 0%,#d4dee6 100%);color:#31414f}
+    .report-table .subtotal td{background:#f3efe1;font-weight:900;text-align:center}
+    .report-table .grand-total td{background:#edf3f8;font-weight:900;text-align:center}
+    .report-table .muted-cell{color:var(--muted)}
+    th{position:sticky;top:0;background:linear-gradient(180deg,#eef3f7 0%,#e6edf3 100%);color:#5b6c7c;font-size:12px;font-weight:900;text-align:center;z-index:1;box-shadow:inset 0 -1px 0 var(--line-soft)}
+    td{text-align:center}
+    td.num{text-align:center;font-variant-numeric:tabular-nums}
+    tr:hover td{background:rgba(244,248,251,.88)}
+    th.sortable{cursor:pointer;user-select:none;position:sticky;top:0}
+    th.sortable:hover{background:linear-gradient(180deg,#e4edf5 0%,#dce8f1 100%);color:var(--text)}
+    .sort-indicator{display:inline-block;margin-left:6px;font-size:11px;color:#98a2b3;vertical-align:middle}
+    .sort-indicator.active{color:var(--primary)}
+    .th-inner{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-width:0;max-width:100%;margin:0 auto;text-align:center}
+    .th-label{display:block;min-width:0;max-width:100%;overflow:hidden;text-overflow:clip;white-space:nowrap;text-align:center}
+    .sort-btn{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border:none;background:transparent;border-radius:4px;cursor:pointer;padding:0;color:inherit;position:static;transform:none;z-index:8;flex:0 0 auto}
+    .sort-btn:hover{background:rgba(107,143,176,.12)}
+    .sort-btn:focus-visible{outline:2px solid rgba(107,143,176,.45);outline-offset:1px}
+    .sort-btn .sort-indicator{margin-left:0;font-size:11px;line-height:1}
+    .resizable-col{position:sticky;top:0}
+    .resize-handle{position:absolute;top:0;right:-5px;width:10px;height:100%;cursor:col-resize;z-index:6;touch-action:none}
+    .resize-handle::after{content:"";position:absolute;top:18%;bottom:18%;left:4px;width:2px;border-radius:999px;background:rgba(107,143,176,.28);transition:background .15s ease}
+    th:hover .resize-handle::after,.resizing .resize-handle::after{background:rgba(107,143,176,.6)}
+    body.col-resizing{cursor:col-resize;user-select:none}
+    .summary-stat{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px dashed rgba(177,193,207,.5);font-size:14px}
+    .summary-stat:last-child{border-bottom:none}
+    .metric-strong{font-weight:900}
+    canvas{width:100%;max-height:360px}
+    .empty{padding:28px 18px;text-align:center;color:var(--muted);font-size:14px}
+    .modal{position:fixed;inset:0;background:rgba(105,122,139,.42);display:none;align-items:center;justify-content:center;padding:20px;z-index:30;backdrop-filter:blur(8px)}
+    .modal.show{display:flex}
+    .modal-card{max-width:1160px;width:100%;max-height:90vh;overflow:auto;padding:20px;background:rgba(248,251,253,.88)}
+    .mapping-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+    .mapping{display:flex;flex-direction:column;gap:8px}
+    .mapping label{font-size:12px;font-weight:900;color:var(--muted)}
+    .mapping label.required-label{color:#c0392b}
+    .mapping label.required-label::after{content:" *";color:#c0392b;font-weight:900}
+    .mapping small{font-size:11px;color:var(--muted);line-height:1.5}
+    .mapping input + select{margin-top:4px}
+    .mapping select{display:block}
+    .mapping-head{display:flex;justify-content:space-between;gap:10px;align-items:flex-start;margin-bottom:14px}
+    .mapping-box{padding:14px;border:1px solid var(--line);border-radius:20px;background:rgba(255,255,255,.64)}
+    .modal-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:16px}
+    .preview-grid{display:grid;grid-template-columns:1.2fr .8fr;gap:16px;margin-top:16px}
+    .badge{display:inline-flex;align-items:center;padding:4px 8px;border-radius:999px;background:var(--primary-soft);color:var(--primary-strong);font-size:11px;font-weight:900}
+    .pill-input{display:flex;gap:8px}
+    .legend-row{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+    .legend{padding:6px 10px;border-radius:999px;background:rgba(245,248,250,.9);border:1px solid var(--line-soft);font-size:11px;color:var(--muted);font-weight:800}
+    .panel-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:10px}
+    .panel-head .head-copy{min-width:0}
+    .panel-head .head-control{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+    .panel-head .head-control select{padding:8px 10px;border:1px solid var(--line);border-radius:12px;background:rgba(255,255,255,.84)}
+    .wow-cards{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:12px}
+    .wow-card{padding:14px;border:1px solid var(--line);border-radius:18px;background:rgba(255,255,255,.72)}
+    .wow-card .label{font-size:12px;color:var(--muted);font-weight:800;margin-bottom:8px}
+    .wow-card .value{font-size:24px;font-weight:900;letter-spacing:-.03em}
+    .wow-card .sub{margin-top:6px;font-size:11px;color:var(--muted)}
+    ::-webkit-scrollbar{height:10px;width:10px}
+    ::-webkit-scrollbar-track{background:rgba(227,234,240,.7);border-radius:999px}
+    ::-webkit-scrollbar-thumb{background:rgba(125,147,168,.5);border-radius:999px}
+    ::-webkit-scrollbar-thumb:hover{background:rgba(106,128,149,.72)}
+    @media (max-width: 1500px){
+      .filters{grid-template-columns:repeat(4,minmax(170px,1fr))}
+    }
+    @media (max-width: 1180px){
+      .filters{grid-template-columns:repeat(3,minmax(160px,1fr))}
+    }
+    @media (max-width: 1280px){
+      .kpis{grid-template-columns:repeat(3,minmax(0,1fr))}
+      .grid-3{grid-template-columns:1fr}
+      .hero,.grid-2,.preview-grid,.weekly-reports,.imports-layout{grid-template-columns:1fr}
+      .weekly-reports .panel{min-height:unset}
+      .weekly-reports .table-wrap{height:460px;max-height:460px}
+      .wow-cards{grid-template-columns:1fr}
+    }
+    @media (max-width: 760px){
+      .wrap{padding:14px}
+      .filters,.kpis,.mapping-grid{grid-template-columns:1fr}
+      .panel-head{flex-direction:column;align-items:stretch}
+      .title{font-size:28px}
+      .actions{flex-wrap:wrap}
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <div class="panel">
+        <h1 class="title">Advertising Analytics Dashboard</h1>
+        <div class="subtitle" style="display:flex;flex-direction:column;gap:10px;">
+          <div><strong>1</strong> 올바른 파일명으로 기입된 Raw data 파일을 <strong>"Raw data upload"</strong> 섹션에 Drag&Drop or 클릭 후 업로드 합니다.</div>
+          <div style="padding-left:22px;">- 파일명 ex : <strong>"0000년00월0주차_브랜드명_판매플랫폼명_광고유형_검색어유무_버전_날짜"</strong></div>
+          <div style="padding-left:22px;">- 파일명 ex : <strong>"2026년04월5주차_퍼니츠_Naver_SA_검색어X_v1.0_260506"</strong></div>
+          <div><strong>2</strong> 원하는 지표 출력을 위해 섹션들의 선택값을 입력 후 출력된 data를 분석합니다.</div>
+          <div><strong>3</strong> 파일 업로드가 잘못되었다면 <strong>"Imported batch management"</strong> 섹션에서 삭제합니다.</div>
+          <div><strong>4</strong> 대시보드 전체 데이터 Reset 을 원한다면 <strong>"Raw data upload"</strong> 섹션에서 <strong>"Reset stored data"</strong>를 클릭합니다.</div>
+        </div>
+      </div>
+      <div class="panel upload-box" id="uploadDropzone">
+        <h2 class="upload-title">Raw data upload</h2>
+        <div class="status" id="uploadStatus">
+          No files have been imported yet. Select files or drag and drop them here to detect headers automatically and open column mapping one file at a time.
+        </div>
+        <div class="drop-caption">
+          <span class="drop-pill">Drag & drop supported</span>
+          Drop CSV/XLSX files into this area to queue and import multiple files in sequence.
+        </div>
+        <div class="actions">
+          <label class="file-label primary" for="fileInput">Raw data upload (CSV/XLSX)</label>
+          <input id="fileInput" type="file" accept=".csv,.xlsx,.xls,.xlsm,.xlsb" multiple />
+          <button type="button" class="ghost" id="downloadNormalizedBtn">Raw data down</button>
+          <button type="button" class="ghost" id="downloadJsonBtn">JSON down</button>
+          <button type="button" class="danger" id="clearStorageBtn">Reset stored data</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="filters">
+      <div class="filter">
+        <label for="startDateFilter">Start date</label>
+        <input id="startDateFilter" type="date" />
+        <div class="hint">Leave blank for all dates</div>
+      </div>
+      <div class="filter">
+        <label for="endDateFilter">End date</label>
+        <input id="endDateFilter" type="date" />
+        <div class="hint">Leave blank for all dates</div>
+      </div>
+      <div class="filter">
+        <label for="brandFilter">Brand</label>
+        <select id="brandFilter"></select>
+        <div class="hint">Choose a brand to activate the dashboard.</div>
+      </div>
+      <div class="filter">
+        <label for="platformFilter">Ad platform</label>
+        <select id="platformFilter"></select>
+        <div class="hint">Choose an ad platform to activate the dashboard.</div>
+      </div>
+      <div class="filter">
+        <label for="campaignFilter">Campaign</label>
+        <select id="campaignFilter"></select>
+        <div class="hint">Optional filter after brand and ad platform are selected.</div>
+      </div>
+      <div class="filter compact-storage">
+        <label>Storage</label>
+        <div class="summary-stat"><span>Total rows</span><strong id="storedRowsCount">0</strong></div>
+        <div class="summary-stat"><span>Imported batches</span><strong id="storedImportsCount">0</strong></div>
+      </div>
+    </section>
+
+    <section class="kpis" id="kpiContainer"></section>
+
+    <section class="grid-2">
+      <div class="panel">
+        <h2>Key insights</h2>
+        <div class="small-note">Auto-generated from the current filter selection.</div>
+        <div id="insightList" class="insight-list"></div>
+      </div>
+      <div class="panel">
+        <h2>Advancement</h2>
+        <div class="small-note" id="advancementNote">Based on Key insights, this section summarizes immediately actionable improvement directions.</div>
+        <div id="advancementList" class="insight-list"></div>
+      </div>
+    </section>
+
+    <section class="imports-layout">
+      <div class="panel">
+        <h2>ROAS ≤ 300% analysis</h2>
+        <div class="small-note" id="wowRangeNote">Lists creatives with ROAS of 300% or below for the active date range.</div>
+        <div class="table-wrap"><div id="wowTable"></div></div>
+      </div>
+    </section>
+
+    <section class="weekly-reports">
+      <div class="panel">
+        <h2 id="selectedDataTitle">Select data</h2>
+        <div class="small-note" id="selectedDataNote">Shows the total data for the selected Start date ~ End date range.</div>
+        <div class="table-wrap"><div id="selectedDataTable"></div></div>
+      </div>
+      <div class="panel">
+        <h2 id="previousWeekReportTitle">Week - 1</h2>
+        <div class="small-note" id="costRevenueChartNote">Automatically builds the previous-week report from accumulated data.</div>
+        <div class="table-wrap"><div id="previousWeekReportTable"></div></div>
+      </div>
+      <div class="panel">
+        <h2 id="currentWeekReportTitle">Week</h2>
+        <div class="small-note" id="clickConversionChartNote">Automatically builds the latest-week report from accumulated data.</div>
+        <div class="table-wrap"><div id="currentWeekReportTable"></div></div>
+      </div>
+    </section>
+
+    <section class="grid-3">
+      <div class="panel">
+        <h2>Brand summary</h2>
+        <div class="small-note">Review aggregated performance by brand for the current filter selection.</div>
+        <div class="table-wrap"><div id="brandTable"></div></div>
+      </div>
+      <div class="panel">
+        <h2>Ad platform summary</h2>
+        <div class="small-note">Compare ad-platform level spend, revenue, and efficiency at a glance.</div>
+        <div class="table-wrap"><div id="platformTable"></div></div>
+      </div>
+      <div class="panel">
+        <h2>Campaign summary</h2>
+        <div class="small-note">Identify which campaigns are driving the strongest revenue and efficiency.</div>
+        <div class="table-wrap"><div id="campaignTable"></div></div>
+      </div>
+    </section>
+
+    <section class="grid-2">
+      <div class="panel">
+        <h2>Ad group summary</h2>
+        <div class="small-note">Check detailed ad-group performance to spot scale-up and optimization targets.</div>
+        <div class="table-wrap"><div id="adgroupTable"></div></div>
+      </div>
+      <div class="panel">
+        <h2>Keyword / creative summary</h2>
+        <div class="small-note">If a platform has no keyword field, the creative name or a blank value can appear instead.</div>
+        <div class="table-wrap"><div id="keywordTable"></div></div>
+      </div>
+    </section>
+
+    <section class="imports-layout">
+      <div class="panel">
+        <h2>Imported batch management</h2>
+        <div class="small-note">These are the files currently imported. Delete only the files that were uploaded by mistake.</div>
+        <div class="table-wrap"><div id="importsTable"></div></div>
+      </div>
+    </section>
+  </div>
+
+  <div class="modal" id="mappingModal">
+    <div class="modal-card">
+      <div class="mapping-head">
+        <div>
+          <h2 style="margin-bottom:6px;">Column mapping setup</h2>
+          <div class="small-note" id="mappingSummaryText"></div>
+        </div>
+        <span class="badge" id="detectedHeaderBadge">Header auto-detected</span>
+      </div>
+
+      <div class="mapping-box">
+        <div class="mapping-grid">
+          <div class="mapping">
+            <label for="mappingFixedBrand">Brand</label>
+            <select id="mappingFixedBrand"></select>
+            <small>Auto-detected from the file name, and you can change it from the dropdown immediately if needed.</small>
+          </div>
+
+          <div class="mapping">
+            <label for="mappingFixedSalesPlatform">Sales platform</label>
+            <select id="mappingFixedSalesPlatform"></select>
+            <small>Auto-detected from the file name, and you can change it from the dropdown immediately if needed.</small>
+          </div>
+
+          <div class="mapping">
+            <label for="mappingFixedAdPlatform">Ad platform</label>
+            <select id="mappingFixedAdPlatform"></select>
+            <small>Auto-detected from the file name, and you can change it from the dropdown immediately if needed.</small>
+          </div>
+
+          <div class="mapping">
+            <label for="mappingCampaignType">Campaign type column (optional)</label>
+            <select id="mappingCampaignType"></select>
+            <small>Map values like Shopping Search, GFA, or Brand Search here when available.</small>
+          </div>
+
+          <div class="mapping">
+            <label for="mappingDateColumn">Date column (single column)</label>
+            <select id="mappingDateColumn"></select>
+            <small>Select this when the report has one date column.</small>
+          </div>
+          <div class="mapping">
+            <label for="mappingStartDateColumn">Start date column (optional)</label>
+            <select id="mappingStartDateColumn"></select>
+            <small>Used for reports such as Meta that have separate start and end date columns.</small>
+          </div>
+
+          <div class="mapping">
+            <label for="mappingEndDateColumn">End date column (optional)</label>
+            <select id="mappingEndDateColumn"></select>
+            <small>Used together with the start date column when there is no single date column.</small>
+          </div>
+          <div class="mapping">
+            <label class="required-label">Fallback date range (when no date column exists)</label>
+            <div class="pill-input">
+              <input id="mappingFixedStart" type="date" />
+              <input id="mappingFixedEnd" type="date" />
+            </div>
+            <small>For summary reports without date columns, provide a start and end date. Auto-detected values are pre-filled when possible.</small>
+          </div>
+
+          <div class="mapping">
+            <label for="mappingCost" class="required-label">Cost</label>
+            <select id="mappingCost"></select>
+          </div>
+          <div class="mapping">
+            <label for="mappingRevenue" class="required-label">Revenue</label>
+            <select id="mappingRevenue"></select>
+          </div>
+
+          <div class="mapping">
+            <label for="mappingImpressions" class="required-label">Impressions</label>
+            <select id="mappingImpressions"></select>
+          </div>
+          <div class="mapping">
+            <label for="mappingClicks" class="required-label">Clicks</label>
+            <select id="mappingClicks"></select>
+          </div>
+
+          <div class="mapping">
+            <label for="mappingConversions" class="required-label">Conversions</label>
+            <select id="mappingConversions"></select>
+          </div>
+          <div class="mapping">
+            <label for="mappingCampaign">Campaign</label>
+            <select id="mappingCampaign"></select>
+          </div>
+
+          <div class="mapping">
+            <label for="mappingAdgroup">Ad group</label>
+            <select id="mappingAdgroup"></select>
+          </div>
+          <div class="mapping">
+            <label for="mappingKeyword">Keyword / creative</label>
+            <select id="mappingKeyword"></select>
+          </div>
+
+          <div class="mapping" style="grid-column:1 / -1;">
+            <label for="mappingMemo">Import memo</label>
+            <input id="mappingMemo" type="text" placeholder="Example: April 2026 Meta retargeting report" />
+            <small>Stored so you can identify the report easily in batch management.</small>
+          </div>
+        </div>
+
+        <div class="preview-grid">
+          <div>
+            <h2 style="font-size:16px;">Preview data</h2>
+            <div class="table-wrap"><div id="mappingPreview"></div></div>
+          </div>
+          <div>
+            <h2 style="font-size:16px;">Detected information</h2>
+            <div class="small-note" id="mappingDetectedInfo"></div>
+            <div class="legend-row">
+              <span class="legend" id="mappingFileName"></span>
+              <span class="legend" id="mappingSheetName"></span>
+              <span class="legend" id="mappingRowsCount"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="modal-actions">
+        <button class="ghost" id="cancelMappingBtn">Cancel</button>
+        <button class="primary" id="confirmImportBtn">Import with this mapping</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
