@@ -12,7 +12,8 @@ const state = {
   tableSorts: {},
   weeklySorts: {},
   fileQueue: [],
-  isReadingFile: false
+  isReadingFile: false,
+  editingImportId: null
 };
 
 
@@ -121,6 +122,9 @@ function normalizeAdPlatformName(value) {
   if (normalized.includes('gfa') || normalized.includes('display') || normalized.includes('naver(da)') || normalized.includes('네이버da') || normalized === 'da') return 'DA';
   if (normalized.includes('naver(sa)') || normalized.includes('파워링크') || normalized.includes('쇼핑검색') || normalized.includes('searchad') || normalized.includes('네이버sa') || normalized === 'naver' || normalized === '네이버' || normalized === 'sa') return 'SA';
   if (normalized.includes('meta') || normalized.includes('facebook') || normalized.includes('instagram') || normalized.includes('페이스북') || normalized.includes('인스타') || normalized.includes('fb_')) return 'Meta';
+  if (normalized.includes('coupang') || normalized.includes('쿠팡')) return 'Coupang';
+  if (normalized.includes("today'shouse") || normalized.includes('todayshouse') || normalized.includes('오늘의집') || normalized.includes('ohouse')) return "Today's house";
+  if (normalized.includes('google') || normalized.includes('구글')) return 'Google';
   return text;
 }
 
@@ -131,7 +135,7 @@ function normalizeBrandName(value) {
 
 const PRESET_BRANDS = ['퍼니츠', '풀오브빈스', '뽀뽀백번'];
 const PRESET_SALES_PLATFORMS = ['Cafe24', 'Smartstore', "Today's house", 'Coupang', 'Google', 'Meta', 'Naver'];
-const PRESET_AD_PLATFORMS = ['SA', 'DA', 'Meta'];
+const PRESET_AD_PLATFORMS = ['SA', 'DA', 'Meta', 'Coupang', "Today\'s house", 'Google'];
 const CUSTOM_OPTION_VALUE = '__custom__';
 const RESET_PASSWORD = 'ue250830~!@';
 const DEPLOYMENT_JSON_PATH = 'data.json';
@@ -166,10 +170,12 @@ function normalizeUnicodeNfc(value) {
 
 
 function normalizeRowRecord(row) {
+  const normalizedSalesPlatform = normalizeSalesPlatformName(row.salesPlatform || row.storePlatform || '미지정');
+  const normalizedAdPlatform = normalizeAdPlatformName(row.adPlatform || row.platform || normalizedSalesPlatform || '미지정');
   return {
     brand: normalizeBrandName(row.brand || row.importBrand || '미지정'),
-    salesPlatform: normalizeSalesPlatformName(row.salesPlatform || row.storePlatform || '미지정'),
-    adPlatform: normalizeAdPlatformName(row.adPlatform || row.platform || '미지정'),
+    salesPlatform: normalizedSalesPlatform,
+    adPlatform: normalizedAdPlatform,
     periodStart: row.periodStart || '',
     periodEnd: row.periodEnd || row.periodStart || '',
     campaignType: safeText(row.campaignType || '-'),
@@ -189,6 +195,8 @@ function normalizeRowRecord(row) {
 }
 
 function normalizeImportRecord(item) {
+  const normalizedSalesPlatform = normalizeSalesPlatformName(item.salesPlatform || '미지정');
+  const normalizedAdPlatform = normalizeAdPlatformName(item.adPlatform || normalizedSalesPlatform || '미지정');
   return {
     id: item.id || simpleHash(JSON.stringify([item.fileName || '', item.sheetName || '', item.createdAt || ''])),
     createdAt: item.createdAt || '',
@@ -196,13 +204,127 @@ function normalizeImportRecord(item) {
     sheetName: normalizeUnicodeNfc(item.sheetName || ''),
     memo: normalizeUnicodeNfc(item.memo || ''),
     brand: normalizeBrandName(item.brand || '미지정'),
-    salesPlatform: normalizeSalesPlatformName(item.salesPlatform || '미지정'),
-    adPlatform: normalizeAdPlatformName(item.adPlatform || '미지정'),
+    salesPlatform: normalizedSalesPlatform,
+    adPlatform: normalizedAdPlatform,
     rowCount: Number(item.rowCount || 0),
     startDate: item.startDate || '',
     endDate: item.endDate || '',
     signature: item.signature || ''
   };
+}
+
+function getRowPlatformValue(row) {
+  return normalizeAdPlatformName(
+    row?.adPlatform ||
+    row?.platform ||
+    row?.salesPlatform ||
+    row?.storePlatform ||
+    ''
+  );
+}
+
+function getImportPlatformValue(item) {
+  return normalizeAdPlatformName(
+    item?.adPlatform ||
+    item?.platform ||
+    item?.salesPlatform ||
+    ''
+  );
+}
+
+function getImportMetaById(importId) {
+  if (!importId) return null;
+  return state.imports.find(item => item.id === importId) || null;
+}
+
+function getResolvedRowMeta(row) {
+  const importMeta = getImportMetaById(row?.importId);
+  const brand = normalizeBrandName(row?.brand || importMeta?.brand || '미지정');
+  const salesPlatform = normalizeSalesPlatformName(row?.salesPlatform || row?.storePlatform || importMeta?.salesPlatform || '미지정');
+  const adPlatform = normalizeAdPlatformName(
+    row?.adPlatform ||
+    row?.platform ||
+    importMeta?.adPlatform ||
+    salesPlatform ||
+    importMeta?.salesPlatform ||
+    ''
+  );
+  const dateRange = getRowEffectiveDateRange(row || {});
+  return {
+    brand,
+    salesPlatform,
+    adPlatform,
+    startDate: dateRange.start || '',
+    endDate: dateRange.end || dateRange.start || ''
+  };
+}
+
+function buildResolvedRow(row) {
+  const normalized = normalizeRowRecord(row || {});
+  const meta = getResolvedRowMeta(normalized);
+  return {
+    ...normalized,
+    brand: meta.brand,
+    salesPlatform: meta.salesPlatform,
+    adPlatform: meta.adPlatform,
+    platform: meta.adPlatform,
+    periodStart: meta.startDate || normalized.periodStart || '',
+    periodEnd: meta.endDate || meta.startDate || normalized.periodEnd || normalized.periodStart || ''
+  };
+}
+
+function getResolvedRows(rows) {
+  return hydrateRowsFromImports(Array.isArray(rows) ? rows : [], state.imports).map(buildResolvedRow);
+}
+
+function rowMatchesBrand(row, selectedBrand) {
+  if (!selectedBrand || selectedBrand === '__ALL__') return true;
+  return safeText(getResolvedRowMeta(row).brand) === selectedBrand;
+}
+
+function rowMatchesPlatform(row, selectedPlatform) {
+  if (!selectedPlatform || selectedPlatform === '__ALL__') return true;
+  const meta = getResolvedRowMeta(row);
+  return [
+    safeText(meta.adPlatform, ''),
+    safeText(meta.salesPlatform, ''),
+    safeText(row?.adPlatform, ''),
+    safeText(row?.platform, ''),
+    safeText(row?.salesPlatform, ''),
+    safeText(row?.storePlatform, '')
+  ].includes(selectedPlatform);
+}
+
+function hydrateRowsFromImports(rows, imports) {
+  const importMap = new Map((imports || []).map(item => {
+    const normalized = normalizeImportRecord(item);
+    return [normalized.id, normalized];
+  }));
+  return (rows || []).map(row => {
+    const normalized = normalizeRowRecord(row);
+    const importMeta = importMap.get(normalized.importId);
+    if (importMeta) {
+      if (!normalized.periodStart) normalized.periodStart = importMeta.startDate || '';
+      if (!normalized.periodEnd) normalized.periodEnd = importMeta.endDate || normalized.periodStart || '';
+      if ((!normalized.salesPlatform || normalized.salesPlatform === '미지정') && importMeta.salesPlatform) {
+        normalized.salesPlatform = importMeta.salesPlatform;
+      }
+      if ((!normalized.adPlatform || normalized.adPlatform === '미지정') && importMeta.adPlatform) {
+        normalized.adPlatform = importMeta.adPlatform;
+      }
+      if ((!normalized.brand || normalized.brand === '미지정') && importMeta.brand) {
+        normalized.brand = importMeta.brand;
+      }
+    }
+    return normalized;
+  });
+}
+
+function getRowEffectiveDateRange(row) {
+  const importMeta = getImportMetaById(row?.importId);
+  const start = row?.periodStart || importMeta?.startDate || '';
+  const end = row?.periodEnd || row?.periodStart || importMeta?.endDate || importMeta?.startDate || '';
+  return { start, end };
 }
 
 function getRowUniqueKey(row) {
@@ -1174,7 +1296,7 @@ function renderSummaryTables(rows, creativeRows = rows) {
   ];
 
   renderSimpleTable('brandTable', summarizeGroupRows(rows, row => row.brand).slice(0, 50), metricColumns, 'No brand data found.', { defaultSort: { key: 'cost', dir: 'desc' } });
-  renderSimpleTable('platformTable', summarizeGroupRows(rows, row => row.adPlatform).slice(0, 50), metricColumns, 'No ad platform data found.', { defaultSort: { key: 'cost', dir: 'desc' } });
+  renderSimpleTable('platformTable', summarizeGroupRows(rows, row => getResolvedRowMeta(row).adPlatform).slice(0, 50), metricColumns, 'No ad platform data found.', { defaultSort: { key: 'cost', dir: 'desc' } });
   renderSimpleTable('campaignTable', summarizeGroupRows(rows, row => row.campaign).slice(0, 50), metricColumns, 'No campaign data found.', { defaultSort: { key: 'cost', dir: 'desc' } });
   renderSimpleTable('adgroupTable', summarizeGroupRows(rows, row => row.adgroup).slice(0, 80), metricColumns, 'No ad group data found.', { defaultSort: { key: 'cost', dir: 'desc' } });
   const keywordRows = summarizeGroupRows(creativeRows, row => row.keyword).slice(0, 100);
@@ -1191,7 +1313,8 @@ function startOfWeek(dateObj) {
 }
 
 function getRowReferenceDate(row) {
-  return row.periodEnd || row.periodStart || '';
+  const range = getRowEffectiveDateRange(row);
+  return range.end || range.start || '';
 }
 
 function formatPeriodKey(dateText, granularity) {
@@ -1292,7 +1415,10 @@ function formatReportTitle(weekKey) {
 }
 
 function getRowsDateBounds(rows) {
-  const dates = rows.flatMap(row => [row.periodStart, row.periodEnd || row.periodStart])
+  const dates = getResolvedRows(rows).flatMap(row => {
+      const range = getRowEffectiveDateRange(row);
+      return [range.start, range.end || range.start];
+    })
     .map(parseDateValue)
     .filter(Boolean)
     .sort();
@@ -1312,7 +1438,7 @@ function getActiveRange(rows) {
 
 
 function getComparisonWeekKeys(rows) {
-  const comparisonRows = rows.filter(row => getRowReferenceDate(row)).map(row => ({
+  const comparisonRows = getResolvedRows(rows).filter(row => getRowReferenceDate(row)).map(row => ({
     ...row,
     comparisonDate: getRowReferenceDate(row),
     weekKey: formatPeriodKey(getRowReferenceDate(row), 'week')
@@ -1334,7 +1460,7 @@ function averageOf(values) {
 }
 
 function buildWeeklyCampaignGroups(rows, weekKey, rangeOverride = null) {
-  let sourceRows = rows
+  let sourceRows = getResolvedRows(rows)
     .filter(row => getRowReferenceDate(row));
 
   if (rangeOverride && (rangeOverride.start || rangeOverride.end)) {
@@ -1348,12 +1474,13 @@ function buildWeeklyCampaignGroups(rows, weekKey, rangeOverride = null) {
 
   const campaignMap = new Map();
   sourceRows.forEach(row => {
-    const campaignKey = [safeText(row.brand), safeText(row.salesPlatform || '-'), safeText(row.adPlatform || row.platform || '-'), safeText(row.campaignType || '-'), safeText(row.campaign)].join('||');
+    const rowMeta = getResolvedRowMeta(row);
+    const campaignKey = [safeText(rowMeta.brand), safeText(rowMeta.salesPlatform || '-'), safeText(rowMeta.adPlatform || '-'), safeText(row.campaignType || '-'), safeText(row.campaign)].join('||');
     if (!campaignMap.has(campaignKey)) {
       campaignMap.set(campaignKey, {
-        brand: safeText(row.brand),
-        salesPlatform: safeText(row.salesPlatform || '-'),
-        adPlatform: safeText(row.adPlatform || row.platform || '-'),
+        brand: safeText(rowMeta.brand),
+        salesPlatform: safeText(rowMeta.salesPlatform || '-'),
+        adPlatform: safeText(rowMeta.adPlatform || '-'),
         campaignType: safeText(row.campaignType || '-'),
         campaign: safeText(row.campaign),
         sourceRows: [],
@@ -1385,9 +1512,6 @@ function buildWeeklyCampaignGroups(rows, weekKey, rangeOverride = null) {
       };
     });
     const subtotal = calcMetrics(group.sourceRows);
-    subtotal.roas = averageOf(details.map(detail => detail.roas));
-    subtotal.ctr = averageOf(details.map(detail => detail.ctr));
-    subtotal.cvr = averageOf(details.map(detail => detail.cvr));
     return {
       brand: group.brand,
       salesPlatform: group.salesPlatform,
@@ -1400,10 +1524,6 @@ function buildWeeklyCampaignGroups(rows, weekKey, rangeOverride = null) {
   });
 
   const grandTotal = calcMetrics(sourceRows);
-  const allDetails = groups.flatMap(group => group.details);
-  grandTotal.roas = averageOf(allDetails.map(detail => detail.roas));
-  grandTotal.ctr = averageOf(allDetails.map(detail => detail.ctr));
-  grandTotal.cvr = averageOf(allDetails.map(detail => detail.cvr));
   return { groups, grandTotal, rowCount: sourceRows.length };
 }
 
@@ -1582,7 +1702,7 @@ function renderWeekOverWeek(rows) {
   }
 
   document.getElementById('wowRangeNote').textContent = `${formatRangeTitle(activeRange.start, activeRange.end)} · creatives with ROAS ≤ 300%.`;
-  const grouped = summarizeGroupRows(rows, row => [safeText(row.periodStart || '-'), safeText(row.periodEnd || row.periodStart || '-'), safeText(row.brand), safeText(row.salesPlatform || '-'), safeText(row.adPlatform || row.platform), safeText(row.campaignType || '-', '-'), safeText(row.campaign), safeText(row.adgroup), safeText(row.keyword)].join('||'))
+  const grouped = summarizeGroupRows(getResolvedRows(rows), row => [safeText(getRowEffectiveDateRange(row).start || '-'), safeText(getRowEffectiveDateRange(row).end || getRowEffectiveDateRange(row).start || '-'), safeText(row.brand), safeText(row.salesPlatform || '-'), safeText(getRowPlatformValue(row)), safeText(row.campaignType || '-', '-'), safeText(row.campaign), safeText(row.adgroup), safeText(row.keyword)].join('||'))
     .map(item => {
       const [periodStart, periodEnd, brand, salesPlatform, adPlatform, campaignType, campaign, adgroup, keyword] = item.name.split('||');
       return {
@@ -1755,12 +1875,12 @@ function renderImportsTable() {
     createdAt: item.createdAt.replace('T', ' ').slice(0, 16),
     fileName: item.fileName,
     memo: item.memo || '-',
-    brand: item.brand || '-',
-salesPlatform: item.salesPlatform || '-',
-    adPlatform: item.adPlatform || item.platform || '-',
+    brand: normalizeBrandName(item.brand || '-'),
+    salesPlatform: normalizeSalesPlatformName(item.salesPlatform || '-'),
+    adPlatform: getImportPlatformValue(item) || '-',
     rowCount: item.rowCount,
     period: item.startDate && item.endDate ? `${item.startDate} ~ ${item.endDate}` : '-',
-    action: `<button class="inline-btn danger" data-import-id="${item.id}">Delete</button>`
+    action: `<div style="display:flex;gap:6px;justify-content:center;"><button class="inline-btn ghost" data-import-action="edit" data-import-id="${item.id}">Edit</button><button class="inline-btn danger" data-import-action="delete" data-import-id="${item.id}">Delete</button></div>`
   }));
   const columns = [
     { key: 'createdAt', label: 'Imported at' },
@@ -1782,15 +1902,16 @@ function updateFilterOptions() {
   const campaignFilter = document.getElementById('campaignFilter');
 
   const ALL_VALUE = '__ALL__';
-  const brands = Array.from(new Set(state.rows.map(r => safeText(r.brand)).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'ko', { numeric: true, sensitivity: 'base' }));
+  const resolvedRows = getResolvedRows(state.rows);
+  const brands = Array.from(new Set(resolvedRows.map(r => safeText(r.brand)).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'ko', { numeric: true, sensitivity: 'base' }));
   const currentBrand = brandFilter.value || '';
   brandFilter.innerHTML = `<option value="">Select brand</option><option value="${ALL_VALUE}">All</option>` + brands.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
   brandFilter.value = (currentBrand === ALL_VALUE || brands.includes(currentBrand)) ? currentBrand : '';
 
   const brandScopedRows = !brandFilter.value || brandFilter.value === ALL_VALUE
-    ? state.rows.slice()
-    : state.rows.filter(r => safeText(r.brand) === brandFilter.value);
-  const platforms = Array.from(new Set(brandScopedRows.map(r => safeText(r.adPlatform || r.platform)).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'ko', { numeric: true, sensitivity: 'base' }));
+    ? resolvedRows.slice()
+    : resolvedRows.filter(r => rowMatchesBrand(r, brandFilter.value));
+  const platforms = Array.from(new Set(brandScopedRows.map(r => safeText(r.adPlatform || r.salesPlatform)).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'ko', { numeric: true, sensitivity: 'base' }));
   const currentPlatform = platformFilter.value || '';
   platformFilter.innerHTML = `<option value="">Select ad platform</option><option value="${ALL_VALUE}">All</option>` + platforms.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
   platformFilter.value = (currentPlatform === ALL_VALUE || platforms.includes(currentPlatform)) ? currentPlatform : '';
@@ -1802,7 +1923,7 @@ function updateFilterOptions() {
   } else {
     const platformScopedRows = platformFilter.value === ALL_VALUE
       ? brandScopedRows
-      : brandScopedRows.filter(r => safeText(r.adPlatform || r.platform) === platformFilter.value);
+      : brandScopedRows.filter(r => rowMatchesPlatform(r, platformFilter.value));
     const campaigns = Array.from(new Set(platformScopedRows.map(r => safeText(r.campaign)).filter(Boolean))).sort((a, b) => a.localeCompare(b, 'ko', { numeric: true, sensitivity: 'base' }));
     const currentCampaign = campaignFilter.value || '';
     campaignFilter.innerHTML = `<option value="">All campaigns</option>` + campaigns.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
@@ -1843,8 +1964,9 @@ function renderSelectionRequiredState() {
 
 
 function rowOverlaps(row, startDate, endDate) {
-  const rowStart = parseMaybeDate(row.periodStart);
-  const rowEnd = parseMaybeDate(row.periodEnd || row.periodStart);
+  const range = getRowEffectiveDateRange(row);
+  const rowStart = parseMaybeDate(range.start);
+  const rowEnd = parseMaybeDate(range.end || range.start);
   if (!rowStart || !rowEnd) return true;
   if (startDate && rowEnd < startDate) return false;
   if (endDate && rowStart > endDate) return false;
@@ -1867,12 +1989,13 @@ function metricsSignature(row) {
 }
 
 function dimensionKeyWithoutKeyword(row) {
+  const range = getRowEffectiveDateRange(row);
   return [
     safeText(row.brand, ''),
     safeText(row.salesPlatform, ''),
-    safeText(row.adPlatform || row.platform, ''),
-    safeText(row.periodStart, ''),
-    safeText(row.periodEnd || row.periodStart, ''),
+    safeText(getRowPlatformValue(row), ''),
+    safeText(range.start, ''),
+    safeText(range.end || range.start, ''),
     safeText(row.campaignType, ''),
     safeText(row.campaign, ''),
     safeText(row.adgroup, '')
@@ -1902,9 +2025,12 @@ function dedupeExactRows(rows) {
 function aggregateMetricRows(rows, fallbackKeyword = '-') {
   if (!rows.length) return null;
   const base = { ...rows[0] };
+  const range = getRowEffectiveDateRange(base);
   const metrics = calcMetrics(rows);
   return {
     ...base,
+    periodStart: range.start,
+    periodEnd: range.end || range.start,
     keyword: fallbackKeyword,
     cost: metrics.cost,
     revenue: metrics.revenue,
@@ -1927,7 +2053,7 @@ function groupRowsByDimension(rows) {
 
 function getAnalyticsRows(rows) {
   if (!Array.isArray(rows) || !rows.length) return [];
-  const grouped = groupRowsByDimension(dedupeExactRows(rows));
+  const grouped = groupRowsByDimension(dedupeExactRows(getResolvedRows(rows)));
   const result = [];
   grouped.forEach(({ detail, summary }) => {
     if (summary.length) {
@@ -1942,7 +2068,7 @@ function getAnalyticsRows(rows) {
 
 function getCreativeAnalyticsRows(rows) {
   if (!Array.isArray(rows) || !rows.length) return [];
-  const grouped = groupRowsByDimension(dedupeExactRows(rows));
+  const grouped = groupRowsByDimension(dedupeExactRows(getResolvedRows(rows)));
   const result = [];
   grouped.forEach(({ detail, summary }) => {
     if (detail.length) {
@@ -1968,15 +2094,15 @@ function applyFilters() {
     return;
   }
 
-  let baseRows = state.rows.slice();
-  if (brand !== ALL_VALUE) baseRows = baseRows.filter(r => safeText(r.brand) === brand);
-  if (platform !== ALL_VALUE) baseRows = baseRows.filter(r => safeText(r.adPlatform || r.platform) === platform);
+  let baseRows = getResolvedRows(state.rows);
+  if (brand !== ALL_VALUE) baseRows = baseRows.filter(r => rowMatchesBrand(r, brand));
+  if (platform !== ALL_VALUE) baseRows = baseRows.filter(r => rowMatchesPlatform(r, platform));
   if (campaign) baseRows = baseRows.filter(r => safeText(r.campaign) === campaign);
   const scopedRows = baseRows.filter(row => rowOverlaps(row, startDate, endDate));
 
   const analyticsRows = getAnalyticsRows(scopedRows);
   const creativeRows = getCreativeAnalyticsRows(scopedRows);
-  const weeklyBaseRows = getCreativeAnalyticsRows(baseRows);
+  const weeklyBaseRows = baseRows.slice();
   state.filteredRows = analyticsRows;
 
   const metrics = calcMetrics(analyticsRows);
@@ -2022,8 +2148,8 @@ async function loadPersisted() {
     }
     const localRows = JSON.parse(rowsRaw || '[]').map(normalizeRowRecord);
     const localImports = JSON.parse(importsRaw || '[]').map(normalizeImportRecord);
-    state.rows = mergeUniqueRows(remote.rows, localRows);
     state.imports = mergeUniqueImports(remote.imports, localImports);
+    state.rows = hydrateRowsFromImports(mergeUniqueRows(remote.rows, localRows), state.imports);
   } catch (error) {
     console.error(error);
     state.rows = [];
@@ -2090,16 +2216,34 @@ function openMappingModal(pending) {
   document.getElementById('mappingFixedEnd').value = dateRange.end || dateRange.start || '';
 
   const inferredMeta = inferImportMetaFromFileName(pending.fileName);
-  const guessedAdPlatform = inferredMeta.adPlatform || guessAdPlatformName(pending.fileName, pending.headers, pending.dataRows) || '';
-  const guessedSalesPlatform = inferredMeta.salesPlatform || inferSalesPlatformFromAdPlatform(guessedAdPlatform) || '';
-  const guessedBrand = inferredMeta.brand || '';
+  const guessedAdPlatform = pending.prefill?.fixedAdPlatform || inferredMeta.adPlatform || guessAdPlatformName(pending.fileName, pending.headers, pending.dataRows) || '';
+  const guessedSalesPlatform = pending.prefill?.fixedSalesPlatform || inferredMeta.salesPlatform || inferSalesPlatformFromAdPlatform(guessedAdPlatform) || '';
+  const guessedBrand = pending.prefill?.fixedBrand || inferredMeta.brand || '';
 
   setFixedFieldOptions('mappingFixedBrand', PRESET_BRANDS, guessedBrand, 'Select brand');
   setFixedFieldOptions('mappingFixedSalesPlatform', PRESET_SALES_PLATFORMS, guessedSalesPlatform, 'Select sales platform');
   setFixedFieldOptions('mappingFixedAdPlatform', PRESET_AD_PLATFORMS, guessedAdPlatform, 'Select ad platform');
 
-  document.getElementById('mappingMemo').value = '';
-  document.getElementById('mappingSummaryText').innerHTML = `File <strong>${escapeHtml(pending.fileName)}</strong> / Sheet <strong>${escapeHtml(pending.sheetName)}</strong> / Detected header row <strong>${pending.headerIndex + 1}</strong> / Data rows <strong>${formatNumber(pending.dataRows.length)}</strong>`;
+  if (pending.prefill) {
+    const useAutoDateMapping = !pending.prefill.disableAutoDateMapping;
+    populateSelect('mappingDateColumn', headers, useAutoDateMapping ? (pending.prefill.dateColumn || autoDate) : (pending.prefill.dateColumn || ''));
+    populateSelect('mappingStartDateColumn', headers, useAutoDateMapping ? (pending.prefill.startDateColumn || autoStartDate) : (pending.prefill.startDateColumn || ''));
+    populateSelect('mappingEndDateColumn', headers, useAutoDateMapping ? (pending.prefill.endDateColumn || autoEndDate) : (pending.prefill.endDateColumn || ''));
+    populateSelect('mappingCost', headers, pending.prefill.cost || autoDetectField(headers, 'cost'));
+    populateSelect('mappingRevenue', headers, pending.prefill.revenue || autoDetectField(headers, 'revenue'));
+    populateSelect('mappingImpressions', headers, pending.prefill.impressions || autoDetectField(headers, 'impressions'));
+    populateSelect('mappingClicks', headers, pending.prefill.clicks || autoDetectField(headers, 'clicks'));
+    populateSelect('mappingConversions', headers, pending.prefill.conversions || autoDetectField(headers, 'conversions'));
+    populateSelect('mappingCampaignType', headers, pending.prefill.campaignType || autoDetectField(headers, 'campaignType'));
+    populateSelect('mappingCampaign', headers, pending.prefill.campaign || autoDetectField(headers, 'campaign'));
+    populateSelect('mappingAdgroup', headers, pending.prefill.adgroup || autoDetectField(headers, 'adgroup'));
+    populateSelect('mappingKeyword', headers, pending.prefill.keyword || autoDetectField(headers, 'keyword'));
+    document.getElementById('mappingFixedStart').value = pending.prefill.fixedStart || dateRange.start || '';
+    document.getElementById('mappingFixedEnd').value = pending.prefill.fixedEnd || dateRange.end || dateRange.start || '';
+  }
+
+  document.getElementById('mappingMemo').value = pending.prefill?.memo || '';
+  document.getElementById('mappingSummaryText').innerHTML = `${state.editingImportId ? '<strong>Edit mode</strong> / ' : ''}File <strong>${escapeHtml(pending.fileName)}</strong> / Sheet <strong>${escapeHtml(pending.sheetName)}</strong> / Detected header row <strong>${pending.headerIndex + 1}</strong> / Data rows <strong>${formatNumber(pending.dataRows.length)}</strong>`;
   document.getElementById('detectedHeaderBadge').textContent = 'Header row ' + (pending.headerIndex + 1) + ' detected';
 
   const detectionNotes = [];
@@ -2122,6 +2266,7 @@ function openMappingModal(pending) {
 function closeMappingModal() {
   document.getElementById('mappingModal').classList.remove('show');
   state.pending = null;
+  state.editingImportId = null;
   processQueuedFiles();
 }
 
@@ -2178,7 +2323,7 @@ async function normalizeImportedRows() {
     alert('판매 플랫폼은 필수입니다. 파일명 자동 입력값을 확인하거나 직접 입력해 주세요.');
     return;
   }
-  if (!mapping.fixedAdPlatform) {
+  if (!mapping.fixedAdPlatform && !mapping.fixedSalesPlatform) {
     alert('광고 플랫폼은 필수입니다. 파일명 자동 입력값을 확인하거나 직접 입력해 주세요.');
     return;
   }
@@ -2187,8 +2332,11 @@ async function normalizeImportedRows() {
     return;
   }
 
-  const batchId = 'import_' + Date.now();
+  const batchId = state.editingImportId || ('import_' + Date.now());
   const now = new Date().toISOString();
+  const editingTarget = state.editingImportId
+    ? state.imports.find(item => item.id === state.editingImportId) || null
+    : null;
 
   const normalized = state.pending.dataRows.map((row, index) => {
     let start = '';
@@ -2203,8 +2351,10 @@ async function normalizeImportedRows() {
     }
 
     const rawSalesPlatform = safeText(mapping.fixedSalesPlatform, '미지정');
-    const rawAdPlatform = safeText(mapping.fixedAdPlatform, '미지정');
+    const rawAdPlatform = safeText(mapping.fixedAdPlatform || mapping.fixedSalesPlatform, '미지정');
     const rawBrand = safeText(mapping.fixedBrand, '미지정');
+    const normalizedSalesPlatform = normalizeSalesPlatformName(rawSalesPlatform);
+    const normalizedAdPlatform = normalizeAdPlatformName(rawAdPlatform || normalizedSalesPlatform);
 
     return {
       id: batchId + '_' + index,
@@ -2212,9 +2362,9 @@ async function normalizeImportedRows() {
       importFileName: normalizeUnicodeNfc(state.pending.fileName),
       importMemo: mapping.memo,
       brand: normalizeBrandName(rawBrand),
-      salesPlatform: normalizeSalesPlatformName(rawSalesPlatform),
-      adPlatform: normalizeAdPlatformName(rawAdPlatform),
-      platform: normalizeAdPlatformName(rawAdPlatform),
+      salesPlatform: normalizedSalesPlatform,
+      adPlatform: normalizedAdPlatform,
+      platform: normalizedAdPlatform,
       periodStart: start || '',
       periodEnd: end || start || '',
       campaignType: mapping.campaignType ? safeText(row[mapping.campaignType]) : '-',
@@ -2254,21 +2404,31 @@ async function normalizeImportedRows() {
   const dates = normalized.flatMap(row => [row.periodStart, row.periodEnd]).filter(Boolean).sort();
   const previousRows = state.rows.slice();
   const previousImports = state.imports.slice();
-  state.rows = state.rows.concat(normalized);
-  state.imports.push({
+  const nextImport = {
     id: batchId,
-    createdAt: now,
-    fileName: normalizeUnicodeNfc(state.pending.fileName),
-    sheetName: state.pending.sheetName,
+    createdAt: editingTarget?.createdAt || now,
+    fileName: normalizeUnicodeNfc(editingTarget?.fileName || state.pending.fileName),
+    sheetName: editingTarget?.sheetName || state.pending.sheetName,
     memo: mapping.memo,
     brand: normalizeBrandName(mapping.fixedBrand),
     salesPlatform: normalizeSalesPlatformName(mapping.fixedSalesPlatform),
-    adPlatform: normalizeAdPlatformName(mapping.fixedAdPlatform),
+    adPlatform: normalizeAdPlatformName(mapping.fixedAdPlatform || mapping.fixedSalesPlatform),
     rowCount: normalized.length,
-    startDate: dates[0] || '',
-    endDate: dates[dates.length - 1] || '',
+    startDate: dates[0] || mapping.fixedStart || editingTarget?.startDate || '',
+    endDate: dates[dates.length - 1] || mapping.fixedEnd || editingTarget?.endDate || '',
     signature
-  });
+  };
+
+  if (state.editingImportId) {
+    state.rows = state.rows.filter(row => row.importId !== state.editingImportId).concat(normalized);
+    state.imports = state.imports.map(item => item.id === state.editingImportId ? nextImport : item);
+  } else {
+    state.rows = state.rows.concat(normalized);
+    state.imports.push(nextImport);
+  }
+
+  state.imports = mergeUniqueImports(state.imports);
+  state.rows = hydrateRowsFromImports(mergeUniqueRows(state.rows), state.imports);
 
   try {
     await persist();
@@ -2285,7 +2445,9 @@ async function normalizeImportedRows() {
   }
   updateFilterOptions();
   applyFilters();
-  document.getElementById('uploadStatus').innerHTML = `<strong>${escapeHtml(state.pending.fileName)}</strong>: <strong>${formatNumber(normalized.length)}개 행</strong>을 가져와 저장했습니다.${state.fileQueue.length ? ` 대기 중인 파일 <strong>${formatNumber(state.fileQueue.length)}개</strong>.` : ''}`;
+  document.getElementById('uploadStatus').innerHTML = state.editingImportId
+    ? `<strong>${escapeHtml(nextImport.fileName)}</strong>: <strong>${formatNumber(normalized.length)}개 행</strong> 수정 내용이 저장되었습니다.`
+    : `<strong>${escapeHtml(state.pending.fileName)}</strong>: <strong>${formatNumber(normalized.length)}개 행</strong>을 가져와 저장했습니다.${state.fileQueue.length ? ` 대기 중인 파일 <strong>${formatNumber(state.fileQueue.length)}개</strong>.` : ''}`;
   closeMappingModal();
   } catch (error) {
     console.error(error);
@@ -2487,6 +2649,66 @@ function triggerDownload(blob, fileName) {
   }, 4000);
 }
 
+function editImport(importId) {
+  const target = state.imports.find(item => item.id === importId);
+  if (!target) return;
+
+  const sourceRows = state.rows
+    .filter(row => row.importId === importId)
+    .map(row => normalizeRowRecord(row));
+
+  if (!sourceRows.length) {
+    alert('수정할 배치 행이 없습니다.');
+    return;
+  }
+
+  const headers = ['periodStart','periodEnd','cost','revenue','impressions','clicks','conversions','campaignType','campaign','adgroup','keyword'];
+  const dataRows = sourceRows.map(row => ({
+    periodStart: row.periodStart || '',
+    periodEnd: row.periodEnd || '',
+    cost: row.cost,
+    revenue: row.revenue,
+    impressions: row.impressions,
+    clicks: row.clicks,
+    conversions: row.conversions,
+    campaignType: row.campaignType,
+    campaign: row.campaign,
+    adgroup: row.adgroup,
+    keyword: row.keyword
+  }));
+
+  state.editingImportId = importId;
+  openMappingModal({
+    fileName: target.fileName || 'Imported batch',
+    sheetName: target.sheetName || 'Imported rows',
+    headers,
+    dataRows,
+    headerIndex: 0,
+    metaText: `${target.startDate || ''} ~ ${target.endDate || ''}`.trim(),
+    prefill: {
+      fixedBrand: target.brand || '',
+      fixedSalesPlatform: target.salesPlatform || '',
+      fixedAdPlatform: target.adPlatform || target.salesPlatform || '',
+      fixedStart: target.startDate || '',
+      fixedEnd: target.endDate || '',
+      cost: 'cost',
+      revenue: 'revenue',
+      impressions: 'impressions',
+      clicks: 'clicks',
+      conversions: 'conversions',
+      campaignType: 'campaignType',
+      campaign: 'campaign',
+      adgroup: 'adgroup',
+      keyword: 'keyword',
+      dateColumn: '',
+      startDateColumn: '',
+      endDateColumn: '',
+      disableAutoDateMapping: true,
+      memo: target.memo || ''
+    }
+  });
+}
+
 function deleteImport(importId) {
   const target = state.imports.find(item => item.id === importId);
   if (!target) return;
@@ -2622,7 +2844,13 @@ function bindEvents() {
   document.getElementById('importsTable').addEventListener('click', event => {
     const button = event.target.closest('[data-import-id]');
     if (!button) return;
-    deleteImport(button.getAttribute('data-import-id'));
+    const action = button.getAttribute('data-import-action') || 'delete';
+    const importId = button.getAttribute('data-import-id');
+    if (action === 'edit') {
+      editImport(importId);
+      return;
+    }
+    deleteImport(importId);
   });
 
   document.getElementById('mappingModal').addEventListener('click', event => {
