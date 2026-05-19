@@ -2929,15 +2929,17 @@ function bindEvents() {
   });
 
   document.getElementById('importsTable').addEventListener('click', event => {
-    const button = event.target.closest('[data-import-id]');
-    if (!button) return;
-    const action = button.getAttribute('data-import-action') || 'delete';
-    const importId = button.getAttribute('data-import-id');
+    const actionButton = event.target.closest('[data-import-action][data-import-id]');
+    if (!actionButton) return;
+    const action = actionButton.getAttribute('data-import-action');
+    const importId = actionButton.getAttribute('data-import-id');
     if (action === 'edit') {
       editImport(importId);
       return;
     }
-    deleteImport(importId);
+    if (action === 'delete') {
+      deleteImport(importId);
+    }
   });
 
   document.getElementById('importsTable').addEventListener('change', event => {
