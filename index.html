@@ -397,8 +397,16 @@
 
     <section class="imports-layout">
       <div class="panel">
-        <h2>Imported batch management</h2>
-        <div class="small-note">These are the files currently imported. Delete only the files that were uploaded by mistake.</div>
+        <div class="panel-head">
+          <div class="head-copy">
+            <h2>Imported batch management</h2>
+            <div class="small-note">These are the files currently imported. Delete only the files that were uploaded by mistake.</div>
+          </div>
+          <div class="head-control">
+            <span class="legend" id="selectedImportsCount">0 selected</span>
+            <button type="button" class="danger" id="deleteSelectedImportsBtn" disabled>Delete selected</button>
+          </div>
+        </div>
         <div class="table-wrap"><div id="importsTable"></div></div>
       </div>
     </section>

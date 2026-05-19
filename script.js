@@ -13,7 +13,8 @@ const state = {
   weeklySorts: {},
   fileQueue: [],
   isReadingFile: false,
-  editingImportId: null
+  editingImportId: null,
+  selectedImportIds: []
 };
 
 
@@ -1063,11 +1064,36 @@ function summarizeGroupRows(rows, labelGetter) {
 
 
 function getSortIndicator(sortState, key) {
+  if (Array.isArray(sortState)) {
+    const matched = sortState.find(item => item.key === key);
+    if (!matched) return '<span class="sort-indicator">↕</span>';
+    return `<span class="sort-indicator active">${matched.dir === 'asc' ? '↑' : '↓'}</span>`;
+  }
   if (!sortState || sortState.key !== key) return '<span class="sort-indicator">↕</span>';
   return `<span class="sort-indicator active">${sortState.dir === 'asc' ? '↑' : '↓'}</span>`;
 }
 
+function isMultiSortTableId(tableId) {
+  return tableId === 'importsTable';
+}
+
+function updateMultiSortState(currentState, key) {
+  const next = Array.isArray(currentState) ? currentState.slice() : [];
+  const existingIndex = next.findIndex(item => item.key === key);
+  if (existingIndex >= 0) {
+    const current = next.splice(existingIndex, 1)[0];
+    current.dir = current.dir === 'asc' ? 'desc' : 'asc';
+    next.unshift(current);
+    return next;
+  }
+  next.unshift({ key, dir: 'asc' });
+  return next;
+}
+
 function buildHeaderCell(tableId, col, sortState) {
+  if (col.headerHtml) {
+    return `<th>${col.headerHtml}</th>`;
+  }
   const sortable = col.sortable !== false;
   const sortButton = sortable
     ? `<button type="button" class="sort-btn" data-sort-table="${escapeHtml(tableId)}" data-sort-key="${escapeHtml(col.key)}" aria-label="Sort by ${escapeHtml(col.label)}">${getSortIndicator(sortState, col.key)}</button>`
@@ -1093,13 +1119,18 @@ function getColumnSortValue(row, column) {
 }
 
 function sortSimpleRows(rows, columns, sortState) {
-  if (!sortState || !sortState.key) return rows.slice();
-  const column = columns.find(col => col.key === sortState.key);
-  if (!column) return rows.slice();
-  const direction = sortState.dir === 'desc' ? -1 : 1;
+  if (!sortState || (Array.isArray(sortState) && !sortState.length) || (!Array.isArray(sortState) && !sortState.key)) {
+    return rows.slice();
+  }
+  const criteria = Array.isArray(sortState) ? sortState : [sortState];
   return rows.slice().sort((a, b) => {
-    const compared = compareValues(getColumnSortValue(a, column), getColumnSortValue(b, column), !!column.num);
-    if (compared !== 0) return compared * direction;
+    for (const criterion of criteria) {
+      const column = columns.find(col => col.key === criterion.key);
+      if (!column) continue;
+      const direction = criterion.dir === 'desc' ? -1 : 1;
+      const compared = compareValues(getColumnSortValue(a, column), getColumnSortValue(b, column), !!column.num);
+      if (compared !== 0) return compared * direction;
+    }
     return 0;
   });
 }
@@ -1471,6 +1502,11 @@ function buildWeeklyCampaignGroups(rows, weekKey, rangeOverride = null) {
   } else {
     sourceRows = sourceRows.filter(row => formatPeriodKey(getRowReferenceDate(row), 'week') === weekKey);
   }
+
+  // Weekly tables must not double-count paired summary/detail imports
+  // such as 검색어X (summary) + 검색어O (detail). Reuse the same
+  // analytics-row dedupe path used by KPI/summary sections.
+  sourceRows = getAnalyticsRows(sourceRows);
 
   const campaignMap = new Map();
   sourceRows.forEach(row => {
@@ -1870,8 +1906,47 @@ function renderPreview(rows) {
   if (previewTarget) previewTarget.innerHTML = tableHtml('rawPreviewTable', previewRows, columns, 'No normalized data stored.');
 }
 
+function syncSelectedImportsUi() {
+  const count = state.selectedImportIds.length;
+  const countEl = document.getElementById('selectedImportsCount');
+  const buttonEl = document.getElementById('deleteSelectedImportsBtn');
+  if (countEl) countEl.textContent = `${formatNumber(count)} selected`;
+  if (buttonEl) buttonEl.disabled = count === 0;
+}
+
+function toggleImportSelection(importId, isSelected) {
+  const next = new Set(state.selectedImportIds);
+  if (isSelected) next.add(importId);
+  else next.delete(importId);
+  state.selectedImportIds = Array.from(next);
+  syncSelectedImportsUi();
+}
+
+function toggleAllImportSelection(isSelected) {
+  state.selectedImportIds = isSelected ? state.imports.map(item => item.id) : [];
+  renderImportsTable();
+}
+
+function deleteSelectedImports() {
+  const selectedIds = Array.from(new Set(state.selectedImportIds)).filter(Boolean);
+  if (!selectedIds.length) return;
+  const proceed = confirm(`${formatNumber(selectedIds.length)}개 배치를 삭제하시겠습니까? 선택한 배치의 모든 행이 함께 삭제됩니다.`);
+  if (!proceed) return;
+  state.rows = state.rows.filter(row => !selectedIds.includes(row.importId));
+  state.imports = state.imports.filter(item => !selectedIds.includes(item.id));
+  state.selectedImportIds = [];
+  persist();
+  updateFilterOptions();
+  applyFilters();
+}
+
 function renderImportsTable() {
-  const rows = state.imports.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt)).map(item => ({
+  const selectedSet = new Set(state.selectedImportIds);
+  const rows = state.imports.slice().map(item => ({
+    importId: item.id,
+    selected: selectedSet.has(item.id)
+      ? `<input type="checkbox" data-import-checkbox="true" data-import-id="${item.id}" checked />`
+      : `<input type="checkbox" data-import-checkbox="true" data-import-id="${item.id}" />`,
     createdAt: item.createdAt.replace('T', ' ').slice(0, 16),
     fileName: item.fileName,
     memo: item.memo || '-',
@@ -1882,7 +1957,16 @@ function renderImportsTable() {
     period: item.startDate && item.endDate ? `${item.startDate} ~ ${item.endDate}` : '-',
     action: `<div style="display:flex;gap:6px;justify-content:center;"><button class="inline-btn ghost" data-import-action="edit" data-import-id="${item.id}">Edit</button><button class="inline-btn danger" data-import-action="delete" data-import-id="${item.id}">Delete</button></div>`
   }));
+  const allSelected = !!rows.length && rows.every(row => selectedSet.has(row.importId));
   const columns = [
+    {
+      key: 'selected',
+      label: '',
+      headerHtml: `<div style="display:flex;justify-content:center;"><input type="checkbox" id="selectAllImports" ${allSelected ? 'checked' : ''} /></div>`,
+      render: v => v,
+      html: true,
+      sortable: false
+    },
     { key: 'createdAt', label: 'Imported at' },
     { key: 'fileName', label: 'File name' },
     { key: 'brand', label: 'Brand' },
@@ -1891,9 +1975,10 @@ function renderImportsTable() {
     { key: 'memo', label: 'Memo' },
     { key: 'rowCount', label: 'Rows', render: v => formatNumber(v), num: true },
     { key: 'period', label: 'Period' },
-    { key: 'action', label: 'Action', render: v => v, html: true }
+    { key: 'action', label: 'Action', render: v => v, html: true, sortable: false }
   ];
-  renderSimpleTable('importsTable', rows, columns, 'No imported batches yet.', { defaultSort: { key: 'createdAt', dir: 'desc' } });
+  renderSimpleTable('importsTable', rows, columns, 'No imported batches yet.', { defaultSort: [{ key: 'createdAt', dir: 'desc' }] });
+  syncSelectedImportsUi();
 }
 
 function updateFilterOptions() {
@@ -2716,6 +2801,7 @@ function deleteImport(importId) {
   if (!proceed) return;
   state.rows = state.rows.filter(row => row.importId !== importId);
   state.imports = state.imports.filter(item => item.id !== importId);
+  state.selectedImportIds = state.selectedImportIds.filter(id => id !== importId);
   persist();
   updateFilterOptions();
   applyFilters();
@@ -2833,6 +2919,7 @@ function bindEvents() {
   document.getElementById('downloadNormalizedBtn').addEventListener('click', downloadNormalizedXlsx);
   document.getElementById('downloadJsonBtn').addEventListener('click', downloadDashboardJson);
   document.getElementById('clearStorageBtn').addEventListener('click', clearAllStorage);
+  document.getElementById('deleteSelectedImportsBtn').addEventListener('click', deleteSelectedImports);
 
   ['brandFilter', 'platformFilter', 'campaignFilter', 'startDateFilter', 'endDateFilter'].forEach(id => {
     document.getElementById(id).addEventListener('change', () => {
@@ -2853,6 +2940,17 @@ function bindEvents() {
     deleteImport(importId);
   });
 
+  document.getElementById('importsTable').addEventListener('change', event => {
+    const checkbox = event.target.closest('[data-import-checkbox]');
+    if (checkbox) {
+      toggleImportSelection(checkbox.getAttribute('data-import-id'), checkbox.checked);
+      return;
+    }
+    if (event.target.id === 'selectAllImports') {
+      toggleAllImportSelection(event.target.checked);
+    }
+  });
+
   document.getElementById('mappingModal').addEventListener('click', event => {
     if (event.target.id === 'mappingModal') closeMappingModal();
   });
@@ -2866,9 +2964,14 @@ function bindEvents() {
     const key = sortButton.getAttribute('data-sort-key');
     const sortStore = isWeeklySortTableId(tableId) ? state.weeklySorts : state.tableSorts;
     const current = sortStore[tableId];
-    sortStore[tableId] = current && current.key === key
-      ? { key, dir: current.dir === 'asc' ? 'desc' : 'asc' }
-      : { key, dir: 'asc' };
+
+    if (isMultiSortTableId(tableId)) {
+      sortStore[tableId] = updateMultiSortState(current, key);
+    } else {
+      sortStore[tableId] = current && current.key === key
+        ? { key, dir: current.dir === 'asc' ? 'desc' : 'asc' }
+        : { key, dir: 'asc' };
+    }
     applyFilters();
   });
 
