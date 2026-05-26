@@ -143,6 +143,7 @@ const DEPLOYMENT_JSON_PATH = 'data.json';
 const DEPLOYMENT_MANIFEST_PATH = 'dashboard-data/index.json';
 const DEPLOYMENT_FLAT_MANIFEST_PATH = 'dashboard-data__index.json';
 const DEPLOYMENT_CHUNK_DIR = 'dashboard-data';
+const JSON_DOWNLOAD_MAX_BYTES = 24 * 1024 * 1024;
 
 function uniquePaths(paths) {
   return Array.from(new Set(paths.filter(Boolean)));
@@ -428,7 +429,22 @@ async function loadRemoteDeploymentJson() {
         }
 
         const rows = chunkPayloads.flatMap(payload => Array.isArray(payload.rows) ? payload.rows : []);
-        const imports = Array.isArray(manifest.imports) ? manifest.imports : [];
+        let imports = Array.isArray(manifest.imports) ? manifest.imports : [];
+        if (!imports.length) {
+          const fallbackCandidates = getDeploymentPathCandidates(DEPLOYMENT_JSON_PATH);
+          for (const candidate of fallbackCandidates) {
+            try {
+              const fallbackPayload = await fetchJsonSafe(candidate);
+              const fallbackImports = fallbackPayload && !Array.isArray(fallbackPayload) && Array.isArray(fallbackPayload.imports) ? fallbackPayload.imports : [];
+              if (fallbackImports.length) {
+                imports = fallbackImports;
+                break;
+              }
+            } catch (error) {
+              // ignore fallback import load errors
+            }
+          }
+        }
         if (rows.length || imports.length) {
           return {
             rows: rows.map(normalizeRowRecord),
@@ -492,6 +508,76 @@ function compareMonthKeysAsc(a, b) {
 }
 
 
+function estimateJsonBytes(value) {
+  try {
+    return new Blob([JSON.stringify(value)]).size;
+  } catch (error) {
+    return JSON.stringify(value).length * 2;
+  }
+}
+
+function splitRowsForJsonDownload(monthKey, rows, maxBytes = JSON_DOWNLOAD_MAX_BYTES) {
+  const normalizedRows = Array.isArray(rows) ? rows : [];
+  if (!normalizedRows.length) {
+    return [{
+      fileName: `dashboard-data__rows_${monthKey}.json`,
+      payload: { version: 1, month: monthKey, rowCount: 0, rows: [] }
+    }];
+  }
+
+  const baseOverhead = estimateJsonBytes({ version: 1, month: monthKey, rowCount: 0, rows: [] });
+  const parts = [];
+  let currentRows = [];
+  let currentBytes = baseOverhead;
+
+  normalizedRows.forEach((row, index) => {
+    const rowBytes = estimateJsonBytes(row) + 2;
+    const wouldOverflow = currentRows.length > 0 && currentBytes + rowBytes > maxBytes;
+
+    if (wouldOverflow) {
+      parts.push(currentRows);
+      currentRows = [];
+      currentBytes = baseOverhead;
+    }
+
+    currentRows.push(row);
+    currentBytes += rowBytes;
+
+    if (index === normalizedRows.length - 1 && currentRows.length) {
+      parts.push(currentRows);
+    }
+  });
+
+  return parts.map((partRows, idx) => {
+    const suffix = parts.length > 1 ? `_part${idx + 1}` : '';
+    return {
+      fileName: `dashboard-data__rows_${monthKey}${suffix}.json`,
+      payload: {
+        version: 1,
+        month: monthKey,
+        rowCount: partRows.length,
+        rows: partRows
+      }
+    };
+  });
+}
+
+function splitImportsForManifest(imports, maxBytes = JSON_DOWNLOAD_MAX_BYTES) {
+  const normalizedImports = Array.isArray(imports) ? imports : [];
+  const baseManifest = {
+    version: 2,
+    exportedAt: '',
+    totalRows: 0,
+    totalImports: normalizedImports.length,
+    imports: [],
+    chunks: []
+  };
+  if (estimateJsonBytes(baseManifest) <= maxBytes) return normalizedImports;
+
+  // Keep manifest safely small by dropping embedded imports when needed.
+  return [];
+}
+
 function buildDeploymentDownloadPlan() {
   const rows = mergeUniqueRows(state.rows || []).map(normalizeRowRecord);
   const imports = mergeUniqueImports(state.imports || []).map(normalizeImportRecord);
@@ -504,45 +590,37 @@ function buildDeploymentDownloadPlan() {
   });
 
   const chunkKeys = Array.from(grouped.keys()).sort(compareMonthKeysAsc);
-  const chunks = chunkKeys.map(key => {
-    const chunkRows = grouped.get(key) || [];
-    return {
-      fileName: `dashboard-data__rows_${key}.json`,
-      payload: {
-        version: 1,
-        month: key,
-        rowCount: chunkRows.length,
-        rows: chunkRows
-      }
-    };
-  });
+  const chunkDownloads = chunkKeys.flatMap(key => splitRowsForJsonDownload(key, grouped.get(key) || []));
+  const manifestImports = splitImportsForManifest(imports);
 
   const manifest = {
     version: 2,
     exportedAt: new Date().toISOString(),
     totalRows: rows.length,
     totalImports: imports.length,
-    imports,
-    chunks: chunks.map(chunk => ({
+    imports: manifestImports,
+    chunks: chunkDownloads.map(chunk => ({
       file: chunk.fileName.replace('dashboard-data__', ''),
       month: chunk.payload.month,
       rowCount: chunk.payload.rowCount
     }))
   };
 
+  const minimalDataPayload = {
+    version: 1,
+    exportedAt: manifest.exportedAt,
+    rows: [],
+    imports
+  };
+
   return {
     manifest,
     downloads: [
       { fileName: 'dashboard-data__index.json', payload: manifest },
-      ...chunks,
+      ...chunkDownloads,
       {
         fileName: 'data.json',
-        payload: {
-          version: 1,
-          exportedAt: manifest.exportedAt,
-          rows: [],
-          imports: manifest.imports
-        }
+        payload: minimalDataPayload
       }
     ]
   };
@@ -2652,61 +2730,14 @@ async function downloadDashboardJson() {
       return;
     }
 
-    const grouped = new Map();
-    rows.forEach(row => {
-      const key = getDeploymentMonthKey(row);
-      if (!grouped.has(key)) grouped.set(key, []);
-      grouped.get(key).push(row);
-    });
-
-    const monthKeys = Array.from(grouped.keys()).sort(compareMonthKeysAsc);
-    const manifest = {
-      version: 2,
-      exportedAt: new Date().toISOString(),
-      totalRows: rows.length,
-      totalImports: imports.length,
-      imports,
-      chunks: monthKeys.map(key => ({
-        file: `rows_${key}.json`,
-        month: key,
-        rowCount: (grouped.get(key) || []).length
-      }))
-    };
-
-    const filesToDownload = [
-      {
-        fileName: 'dashboard-data__index.json',
-        payload: manifest
-      },
-      ...monthKeys.map(key => ({
-        fileName: `dashboard-data__rows_${key}.json`,
-        payload: {
-          version: 1,
-          month: key,
-          rowCount: (grouped.get(key) || []).length,
-          rows: grouped.get(key) || []
-        }
-      })),
-      {
-        fileName: 'data.json',
-        payload: {
-          version: 1,
-          exportedAt: manifest.exportedAt,
-          rows,
-          imports
-        }
-      }
-    ];
-
-    filesToDownload.forEach((item, index) => {
-      const blob = new Blob([JSON.stringify(item.payload)], { type: 'application/json;charset=utf-8' });
-      setTimeout(() => triggerDownload(blob, item.fileName), index * 300);
-    });
+    const plan = buildDeploymentDownloadPlan();
+    const fileCount = startDirectJsonDownloads(plan);
+    const hasSplitFiles = plan.downloads.some(item => /_part\d+\.json$/i.test(item.fileName));
 
     if (statusEl) {
-      statusEl.textContent = `JSON 파일 ${filesToDownload.length}개 다운로드를 시작했습니다. 브라우저에서 다중 다운로드 허용이 필요할 수 있습니다.`;
+      statusEl.textContent = `JSON 파일 ${fileCount}개 다운로드를 시작했습니다. 25MB를 넘는 월별 데이터는 자동 분할됩니다.`;
     }
-    alert(`JSON 파일 ${filesToDownload.length}개 다운로드를 시작했습니다. GitHub에는 그대로 올리셔도 됩니다. dashboard-data__index.json / dashboard-data__rows_YYYY_MM.json 형식도 이번 버전에서 읽을 수 있습니다.`);
+    alert(`JSON 파일 ${fileCount}개 다운로드를 시작했습니다. 25MB를 넘는 월별 데이터는 자동으로 분할되며, GitHub에는 다운로드된 파일을 그대로 올리시면 됩니다.${hasSplitFiles ? ' 이번 다운로드에는 분할 파일이 포함되어 있습니다.' : ''}`);
   } catch (error) {
     console.error(error);
     if (statusEl) statusEl.textContent = 'JSON 파일 다운로드 중 오류가 발생했습니다.';
@@ -2929,17 +2960,15 @@ function bindEvents() {
   });
 
   document.getElementById('importsTable').addEventListener('click', event => {
-    const actionButton = event.target.closest('[data-import-action][data-import-id]');
-    if (!actionButton) return;
-    const action = actionButton.getAttribute('data-import-action');
-    const importId = actionButton.getAttribute('data-import-id');
+    const button = event.target.closest('[data-import-id]');
+    if (!button) return;
+    const action = button.getAttribute('data-import-action') || 'delete';
+    const importId = button.getAttribute('data-import-id');
     if (action === 'edit') {
       editImport(importId);
       return;
     }
-    if (action === 'delete') {
-      deleteImport(importId);
-    }
+    deleteImport(importId);
   });
 
   document.getElementById('importsTable').addEventListener('change', event => {
