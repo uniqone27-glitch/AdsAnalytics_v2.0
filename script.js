@@ -143,7 +143,7 @@ const DEPLOYMENT_JSON_PATH = 'data.json';
 const DEPLOYMENT_MANIFEST_PATH = 'dashboard-data/index.json';
 const DEPLOYMENT_FLAT_MANIFEST_PATH = 'dashboard-data__index.json';
 const DEPLOYMENT_CHUNK_DIR = 'dashboard-data';
-const JSON_DOWNLOAD_MAX_BYTES = 24 * 1024 * 1024;
+const JSON_DOWNLOAD_MAX_BYTES = 24900000;
 
 function uniquePaths(paths) {
   return Array.from(new Set(paths.filter(Boolean)));
@@ -430,6 +430,38 @@ async function loadRemoteDeploymentJson() {
 
         const rows = chunkPayloads.flatMap(payload => Array.isArray(payload.rows) ? payload.rows : []);
         let imports = Array.isArray(manifest.imports) ? manifest.imports : [];
+
+        if (!imports.length && Array.isArray(manifest.importFiles) && manifest.importFiles.length) {
+          const importPayloads = [];
+          for (const importFile of manifest.importFiles) {
+            const importFiles = [
+              `${DEPLOYMENT_CHUNK_DIR}/${importFile}`,
+              `dashboard-data__${importFile}`,
+              importFile
+            ];
+
+            let loadedImportPayload = { imports: [] };
+            let loadedImport = false;
+
+            for (const candidateFile of importFiles) {
+              const candidatePaths = getDeploymentPathCandidates(candidateFile);
+              for (const candidate of candidatePaths) {
+                try {
+                  loadedImportPayload = await fetchJsonSafe(candidate);
+                  loadedImport = true;
+                  break;
+                } catch (error) {
+                  // try next import candidate
+                }
+              }
+              if (loadedImport) break;
+            }
+
+            importPayloads.push(loadedImportPayload);
+          }
+          imports = importPayloads.flatMap(payload => Array.isArray(payload.imports) ? payload.imports : []);
+        }
+
         if (!imports.length) {
           const fallbackCandidates = getDeploymentPathCandidates(DEPLOYMENT_JSON_PATH);
           for (const candidate of fallbackCandidates) {
@@ -562,20 +594,44 @@ function splitRowsForJsonDownload(monthKey, rows, maxBytes = JSON_DOWNLOAD_MAX_B
   });
 }
 
-function splitImportsForManifest(imports, maxBytes = JSON_DOWNLOAD_MAX_BYTES) {
+function splitImportsForJsonDownload(imports, maxBytes = JSON_DOWNLOAD_MAX_BYTES) {
   const normalizedImports = Array.isArray(imports) ? imports : [];
-  const baseManifest = {
-    version: 2,
-    exportedAt: '',
-    totalRows: 0,
-    totalImports: normalizedImports.length,
-    imports: [],
-    chunks: []
-  };
-  if (estimateJsonBytes(baseManifest) <= maxBytes) return normalizedImports;
+  if (!normalizedImports.length) return [];
 
-  // Keep manifest safely small by dropping embedded imports when needed.
-  return [];
+  const baseOverhead = estimateJsonBytes({ version: 1, importCount: 0, imports: [] });
+  const parts = [];
+  let currentImports = [];
+  let currentBytes = baseOverhead;
+
+  normalizedImports.forEach((item, index) => {
+    const itemBytes = estimateJsonBytes(item) + 2;
+    const wouldOverflow = currentImports.length > 0 && currentBytes + itemBytes > maxBytes;
+
+    if (wouldOverflow) {
+      parts.push(currentImports);
+      currentImports = [];
+      currentBytes = baseOverhead;
+    }
+
+    currentImports.push(item);
+    currentBytes += itemBytes;
+
+    if (index === normalizedImports.length - 1 && currentImports.length) {
+      parts.push(currentImports);
+    }
+  });
+
+  return parts.map((partImports, idx) => {
+    const suffix = parts.length > 1 ? `_part${idx + 1}` : '';
+    return {
+      fileName: `dashboard-data__imports${suffix}.json`,
+      payload: {
+        version: 1,
+        importCount: partImports.length,
+        imports: partImports
+      }
+    };
+  });
 }
 
 function buildDeploymentDownloadPlan() {
@@ -591,14 +647,15 @@ function buildDeploymentDownloadPlan() {
 
   const chunkKeys = Array.from(grouped.keys()).sort(compareMonthKeysAsc);
   const chunkDownloads = chunkKeys.flatMap(key => splitRowsForJsonDownload(key, grouped.get(key) || []));
-  const manifestImports = splitImportsForManifest(imports);
+  const importDownloads = splitImportsForJsonDownload(imports);
 
   const manifest = {
     version: 2,
     exportedAt: new Date().toISOString(),
     totalRows: rows.length,
     totalImports: imports.length,
-    imports: manifestImports,
+    imports: [],
+    importFiles: importDownloads.map(item => item.fileName.replace('dashboard-data__', '')),
     chunks: chunkDownloads.map(chunk => ({
       file: chunk.fileName.replace('dashboard-data__', ''),
       month: chunk.payload.month,
@@ -610,13 +667,14 @@ function buildDeploymentDownloadPlan() {
     version: 1,
     exportedAt: manifest.exportedAt,
     rows: [],
-    imports
+    imports: []
   };
 
   return {
     manifest,
     downloads: [
       { fileName: 'dashboard-data__index.json', payload: manifest },
+      ...importDownloads,
       ...chunkDownloads,
       {
         fileName: 'data.json',
@@ -2735,9 +2793,9 @@ async function downloadDashboardJson() {
     const hasSplitFiles = plan.downloads.some(item => /_part\d+\.json$/i.test(item.fileName));
 
     if (statusEl) {
-      statusEl.textContent = `JSON 파일 ${fileCount}개 다운로드를 시작했습니다. 25MB를 넘는 월별 데이터는 자동 분할됩니다.`;
+      statusEl.textContent = `JSON 파일 ${fileCount}개 다운로드를 시작했습니다. 24.9MB를 넘는 JSON 데이터는 자동 분할됩니다.`;
     }
-    alert(`JSON 파일 ${fileCount}개 다운로드를 시작했습니다. 25MB를 넘는 월별 데이터는 자동으로 분할되며, GitHub에는 다운로드된 파일을 그대로 올리시면 됩니다.${hasSplitFiles ? ' 이번 다운로드에는 분할 파일이 포함되어 있습니다.' : ''}`);
+    alert(`JSON 파일 ${fileCount}개 다운로드를 시작했습니다. 24.9MB를 넘는 JSON 데이터는 자동으로 분할되며, GitHub에는 다운로드된 파일을 그대로 올리시면 됩니다.${hasSplitFiles ? ' 이번 다운로드에는 분할 파일이 포함되어 있습니다.' : ''}`);
   } catch (error) {
     console.error(error);
     if (statusEl) statusEl.textContent = 'JSON 파일 다운로드 중 오류가 발생했습니다.';
