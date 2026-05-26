@@ -548,37 +548,39 @@ function estimateJsonBytes(value) {
   }
 }
 
-function splitRowsForJsonDownload(monthKey, rows, maxBytes = JSON_DOWNLOAD_MAX_BYTES) {
-  const normalizedRows = Array.isArray(rows) ? rows : [];
-  if (!normalizedRows.length) {
-    return [{
-      fileName: `dashboard-data__rows_${monthKey}.json`,
-      payload: { version: 1, month: monthKey, rowCount: 0, rows: [] }
-    }];
+function splitItemsRecursively(items, buildPayload, maxBytes = JSON_DOWNLOAD_MAX_BYTES) {
+  const normalizedItems = Array.isArray(items) ? items : [];
+  if (!normalizedItems.length) return [[]];
+
+  const payload = buildPayload(normalizedItems);
+  const payloadBytes = estimateJsonBytes(payload);
+  if (payloadBytes <= maxBytes) return [normalizedItems];
+
+  if (normalizedItems.length <= 1) {
+    return [normalizedItems];
   }
 
-  const baseOverhead = estimateJsonBytes({ version: 1, month: monthKey, rowCount: 0, rows: [] });
-  const parts = [];
-  let currentRows = [];
-  let currentBytes = baseOverhead;
+  const middle = Math.ceil(normalizedItems.length / 2);
+  const first = normalizedItems.slice(0, middle);
+  const second = normalizedItems.slice(middle);
+  return [
+    ...splitItemsRecursively(first, buildPayload, maxBytes),
+    ...splitItemsRecursively(second, buildPayload, maxBytes)
+  ];
+}
 
-  normalizedRows.forEach((row, index) => {
-    const rowBytes = estimateJsonBytes(row) + 2;
-    const wouldOverflow = currentRows.length > 0 && currentBytes + rowBytes > maxBytes;
-
-    if (wouldOverflow) {
-      parts.push(currentRows);
-      currentRows = [];
-      currentBytes = baseOverhead;
-    }
-
-    currentRows.push(row);
-    currentBytes += rowBytes;
-
-    if (index === normalizedRows.length - 1 && currentRows.length) {
-      parts.push(currentRows);
-    }
-  });
+function splitRowsForJsonDownload(monthKey, rows, maxBytes = JSON_DOWNLOAD_MAX_BYTES) {
+  const normalizedRows = Array.isArray(rows) ? rows : [];
+  const parts = splitItemsRecursively(
+    normalizedRows.length ? normalizedRows : [],
+    partRows => ({
+      version: 1,
+      month: monthKey,
+      rowCount: partRows.length,
+      rows: partRows
+    }),
+    maxBytes
+  );
 
   return parts.map((partRows, idx) => {
     const suffix = parts.length > 1 ? `_part${idx + 1}` : '';
@@ -598,28 +600,15 @@ function splitImportsForJsonDownload(imports, maxBytes = JSON_DOWNLOAD_MAX_BYTES
   const normalizedImports = Array.isArray(imports) ? imports : [];
   if (!normalizedImports.length) return [];
 
-  const baseOverhead = estimateJsonBytes({ version: 1, importCount: 0, imports: [] });
-  const parts = [];
-  let currentImports = [];
-  let currentBytes = baseOverhead;
-
-  normalizedImports.forEach((item, index) => {
-    const itemBytes = estimateJsonBytes(item) + 2;
-    const wouldOverflow = currentImports.length > 0 && currentBytes + itemBytes > maxBytes;
-
-    if (wouldOverflow) {
-      parts.push(currentImports);
-      currentImports = [];
-      currentBytes = baseOverhead;
-    }
-
-    currentImports.push(item);
-    currentBytes += itemBytes;
-
-    if (index === normalizedImports.length - 1 && currentImports.length) {
-      parts.push(currentImports);
-    }
-  });
+  const parts = splitItemsRecursively(
+    normalizedImports,
+    partImports => ({
+      version: 1,
+      importCount: partImports.length,
+      imports: partImports
+    }),
+    maxBytes
+  );
 
   return parts.map((partImports, idx) => {
     const suffix = parts.length > 1 ? `_part${idx + 1}` : '';
@@ -2789,13 +2778,18 @@ async function downloadDashboardJson() {
     }
 
     const plan = buildDeploymentDownloadPlan();
+    const oversize = plan.downloads.filter(item => estimateJsonBytes(item.payload) > JSON_DOWNLOAD_MAX_BYTES);
+    if (oversize.length) {
+      throw new Error(`Oversize JSON remained after split: ${oversize.map(item => item.fileName).join(', ')}`);
+    }
+
     const fileCount = startDirectJsonDownloads(plan);
     const hasSplitFiles = plan.downloads.some(item => /_part\d+\.json$/i.test(item.fileName));
 
     if (statusEl) {
-      statusEl.textContent = `JSON 파일 ${fileCount}개 다운로드를 시작했습니다. 24.9MB를 넘는 JSON 데이터는 자동 분할됩니다.`;
+      statusEl.textContent = `JSON 파일 ${fileCount}개 다운로드를 시작했습니다. 모든 파일은 24.9MB 이하로 자동 분할됩니다.`;
     }
-    alert(`JSON 파일 ${fileCount}개 다운로드를 시작했습니다. 24.9MB를 넘는 JSON 데이터는 자동으로 분할되며, GitHub에는 다운로드된 파일을 그대로 올리시면 됩니다.${hasSplitFiles ? ' 이번 다운로드에는 분할 파일이 포함되어 있습니다.' : ''}`);
+    alert(`JSON 파일 ${fileCount}개 다운로드를 시작했습니다. 모든 파일은 24.9MB 이하로 자동 분할되며, GitHub에는 다운로드된 파일을 그대로 올리시면 됩니다.${hasSplitFiles ? ' 이번 다운로드에는 분할 파일이 포함되어 있습니다.' : ''}`);
   } catch (error) {
     console.error(error);
     if (statusEl) statusEl.textContent = 'JSON 파일 다운로드 중 오류가 발생했습니다.';
