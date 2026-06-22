@@ -2781,7 +2781,7 @@ async function normalizeImportedRows() {
   });
 
   if ((isTodaysHousePlatformValue(mapping.fixedSalesPlatform) || isTodaysHousePlatformValue(mapping.fixedAdPlatform)) && !resolveTodaysHouseCampaignField(state.pending.headers, mapping.campaign)) {
-    alert('오늘의집 파일에서는 campaign에 넣을 상품명 컬럼을 찾지 못했습니다. 상품명 컬럼이 포함된 raw data 파일인지 확인해 주세요.');
+    alert('오늘의집 파일에서는 campaign에 넣을 상품명 컬럼을 찾지 못했습니다. 현재 업로드한 파일이 원본 오늘의집 raw data인지 확인해 주세요.');
     return;
   }
 
@@ -3037,6 +3037,15 @@ function editImport(importId) {
   }
 
   const isTodaysHouseImport = isTodaysHousePlatformValue(target.salesPlatform) || isTodaysHousePlatformValue(target.adPlatform);
+  if (isTodaysHouseImport) {
+    const hasMissingLegacyProductName = sourceRows.some(row => !safeText(row.todaysHouseProductName, ''));
+    const hasMissingLegacyProductId = sourceRows.some(row => !safeText(row.todaysHouseProductId, ''));
+    if (hasMissingLegacyProductName || hasMissingLegacyProductId) {
+      alert('이 오늘의집 배치는 예전 버전에서 상품명/상품ID 원본값이 저장되지 않은 상태입니다. 그래서 Edit만으로는 campaign을 상품명으로 복구할 수 없습니다. 기존 배치를 삭제한 뒤 오늘의집 raw data 원본 파일을 다시 업로드해 주세요.');
+      return;
+    }
+  }
+
   const headers = isTodaysHouseImport
     ? ['periodStart','periodEnd','cost','revenue','impressions','clicks','conversions','campaignType','상품명','상품ID','campaign','adgroup','keyword']
     : ['periodStart','periodEnd','cost','revenue','impressions','clicks','conversions','campaignType','campaign','adgroup','keyword'];
@@ -3056,7 +3065,7 @@ function editImport(importId) {
       keyword: row.keyword
     };
     if (isTodaysHouseImport) {
-      baseRow['상품명'] = row.todaysHouseProductName || row.campaign || '';
+      baseRow['상품명'] = row.todaysHouseProductName || '';
       baseRow['상품ID'] = row.todaysHouseProductId || '';
     }
     return baseRow;
