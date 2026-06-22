@@ -140,6 +140,26 @@ function isTodaysHousePlatformValue(value) {
   return normalizeSalesPlatformName(value) === "Today's house" || normalizeAdPlatformName(value) === "Today's house";
 }
 
+function hasTodaysHouseProductColumns(headers) {
+  const normalizedHeaders = (headers || []).map(normalizeHeader);
+  return normalizedHeaders.some(h => h.includes(normalizeHeader('상품명')) || h.includes(normalizeHeader('productname'))) &&
+         normalizedHeaders.some(h => h.includes(normalizeHeader('상품id')) || h.includes(normalizeHeader('productid')) || h.includes(normalizeHeader('상품번호')));
+}
+
+function autoDetectTodaysHouseProductField(headers) {
+  const candidates = ['상품명', '광고상품명', '노출상품명', '대표상품명', '상품명/ID', '상품명(ID)', 'product name', 'productname', 'item name'];
+  const headerList = headers || [];
+  for (const candidate of candidates) {
+    const matched = headerList.find(header => {
+      const normalizedHeader = normalizeHeader(header);
+      const normalizedCandidate = normalizeHeader(candidate);
+      return normalizedHeader === normalizedCandidate || normalizedHeader.includes(normalizedCandidate) || normalizedCandidate.includes(normalizedHeader);
+    });
+    if (matched) return matched;
+  }
+  return '';
+}
+
 function normalizeSalesPlatformName(value) {
   const text = String(value || '').trim();
   if (!text) return '';
@@ -2561,7 +2581,7 @@ function openMappingModal(pending) {
   populateSelect('mappingClicks', headers, autoDetectField(headers, 'clicks'));
   populateSelect('mappingConversions', headers, autoDetectField(headers, 'conversions'));
   populateSelect('mappingCampaignType', headers, autoDetectField(headers, 'campaignType'));
-  populateSelect('mappingCampaign', headers, autoDetectField(headers, 'campaign'));
+  populateSelect('mappingCampaign', headers, todaysHouseDetected ? (todaysHouseCampaignField || autoDetectField(headers, 'campaign')) : autoDetectField(headers, 'campaign'));
   populateSelect('mappingAdgroup', headers, autoDetectField(headers, 'adgroup'));
   populateSelect('mappingKeyword', headers, autoDetectField(headers, 'keyword'));
 
@@ -2572,6 +2592,8 @@ function openMappingModal(pending) {
   const guessedAdPlatform = pending.prefill?.fixedAdPlatform || inferredMeta.adPlatform || guessAdPlatformName(pending.fileName, pending.headers, pending.dataRows) || '';
   const guessedSalesPlatform = pending.prefill?.fixedSalesPlatform || inferredMeta.salesPlatform || inferSalesPlatformFromAdPlatform(guessedAdPlatform) || '';
   const guessedBrand = pending.prefill?.fixedBrand || inferredMeta.brand || '';
+  const todaysHouseDetected = isTodaysHousePlatformValue(guessedSalesPlatform) || isTodaysHousePlatformValue(guessedAdPlatform) || hasTodaysHouseProductColumns(headers);
+  const todaysHouseCampaignField = autoDetectTodaysHouseProductField(headers);
 
   setFixedFieldOptions('mappingFixedBrand', PRESET_BRANDS, guessedBrand, 'Select brand');
   setFixedFieldOptions('mappingFixedSalesPlatform', PRESET_SALES_PLATFORMS, guessedSalesPlatform, 'Select sales platform');
@@ -2588,7 +2610,7 @@ function openMappingModal(pending) {
     populateSelect('mappingClicks', headers, pending.prefill.clicks || autoDetectField(headers, 'clicks'));
     populateSelect('mappingConversions', headers, pending.prefill.conversions || autoDetectField(headers, 'conversions'));
     populateSelect('mappingCampaignType', headers, pending.prefill.campaignType || autoDetectField(headers, 'campaignType'));
-    populateSelect('mappingCampaign', headers, pending.prefill.campaign || autoDetectField(headers, 'campaign'));
+    populateSelect('mappingCampaign', headers, pending.prefill.campaign || (todaysHouseDetected ? (todaysHouseCampaignField || autoDetectField(headers, 'campaign')) : autoDetectField(headers, 'campaign')));
     populateSelect('mappingAdgroup', headers, pending.prefill.adgroup || autoDetectField(headers, 'adgroup'));
     populateSelect('mappingKeyword', headers, pending.prefill.keyword || autoDetectField(headers, 'keyword'));
     document.getElementById('mappingFixedStart').value = pending.prefill.fixedStart || dateRange.start || '';
@@ -2698,7 +2720,7 @@ async function normalizeImportedRows() {
     const normalizedSalesPlatform = normalizeSalesPlatformName(rawSalesPlatform);
     const normalizedAdPlatform = normalizeAdPlatformName(rawAdPlatform || normalizedSalesPlatform);
     const forceFixedDates = isCoupangPlatformValue(normalizedAdPlatform) && !!mapping.fixedStart;
-    const isTodaysHouse = isTodaysHousePlatformValue(normalizedSalesPlatform) || isTodaysHousePlatformValue(normalizedAdPlatform);
+    const isTodaysHouse = isTodaysHousePlatformValue(normalizedSalesPlatform) || isTodaysHousePlatformValue(normalizedAdPlatform) || hasTodaysHouseProductColumns(state.pending.headers) || String(state.pending.fileName || '').includes('오늘의집');
     const todaysHouseProductName = isTodaysHouse ? getTodaysHouseProductName(row) : '';
     const todaysHouseProductId = isTodaysHouse ? getTodaysHouseProductId(row) : '';
 
