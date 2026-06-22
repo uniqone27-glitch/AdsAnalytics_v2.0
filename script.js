@@ -122,11 +122,18 @@ function getObjectValueByNormalizedHeaders(source, candidates) {
 }
 
 function getTodaysHouseProductName(row) {
-  return safeText(getObjectValueByNormalizedHeaders(row, ['상품명', '상품 명', 'product name', 'productname', 'item name', 'itemname']), '');
+  return safeText(getObjectValueByNormalizedHeaders(row, [
+    '상품명', '상품 명', '광고상품명', '광고 상품명', '노출상품명', '노출 상품명',
+    '대표상품명', '대표 상품명', '상품명/id', '상품명(id)', '상품명 id',
+    'product name', 'productname', 'item name', 'itemname'
+  ]), '');
 }
 
 function getTodaysHouseProductId(row) {
-  return safeText(getObjectValueByNormalizedHeaders(row, ['상품ID', '상품 ID', 'product id', 'productid', 'item id', 'itemid', '상품번호', 'product_no']), '');
+  return safeText(getObjectValueByNormalizedHeaders(row, [
+    '상품id', '상품 id', '상품번호', '상품 번호', '대표상품id', '대표 상품 id',
+    'product id', 'productid', 'item id', 'itemid', 'product_no'
+  ]), '');
 }
 
 function isTodaysHousePlatformValue(value) {
@@ -215,6 +222,8 @@ function normalizeRowRecord(row) {
     campaign: safeText(row.campaign || '-'),
     adgroup: safeText(row.adgroup || '-'),
     keyword: safeText(row.keyword || '-'),
+    todaysHouseProductName: safeText(row.todaysHouseProductName || '', ''),
+    todaysHouseProductId: safeText(row.todaysHouseProductId || '', ''),
     cost: Number(row.cost || 0),
     revenue: Number(row.revenue || 0),
     impressions: Number(row.impressions || 0),
@@ -295,12 +304,14 @@ function getResolvedRowMeta(row) {
 function buildResolvedRow(row) {
   const normalized = normalizeRowRecord(row || {});
   const meta = getResolvedRowMeta(normalized);
+  const isTodaysHouse = isTodaysHousePlatformValue(meta.salesPlatform) || isTodaysHousePlatformValue(meta.adPlatform);
   return {
     ...normalized,
     brand: meta.brand,
     salesPlatform: meta.salesPlatform,
     adPlatform: meta.adPlatform,
     platform: meta.adPlatform,
+    campaign: isTodaysHouse ? (normalized.todaysHouseProductName || normalized.campaign) : normalized.campaign,
     periodStart: meta.startDate || '',
     periodEnd: meta.endDate || meta.startDate || ''
   };
@@ -2720,12 +2731,13 @@ async function normalizeImportedRows() {
       campaign: isTodaysHouse ? (todaysHouseProductName || (mapping.campaign ? safeText(row[mapping.campaign]) : '-')) : (mapping.campaign ? safeText(row[mapping.campaign]) : '-'),
       adgroup: mapping.adgroup ? safeText(row[mapping.adgroup]) : '-',
       keyword: mapping.keyword ? safeText(row[mapping.keyword]) : '-',
+      todaysHouseProductName: todaysHouseProductName,
+      todaysHouseProductId: todaysHouseProductId,
       cost: toNumber(row[mapping.cost]),
       revenue: toNumber(row[mapping.revenue]),
       impressions: toNumber(row[mapping.impressions]),
       clicks: toNumber(row[mapping.clicks]),
       conversions: toNumber(row[mapping.conversions]),
-      todaysHouseProductId: todaysHouseProductId,
       createdAt: now
     };
   }).filter(row => {
