@@ -241,12 +241,12 @@ function getImportMetaById(importId) {
 
 function getResolvedRowMeta(row) {
   const importMeta = getImportMetaById(row?.importId);
-  const brand = normalizeBrandName(row?.brand || importMeta?.brand || '미지정');
-  const salesPlatform = normalizeSalesPlatformName(row?.salesPlatform || row?.storePlatform || importMeta?.salesPlatform || '미지정');
+  const brand = normalizeBrandName(importMeta?.brand || row?.brand || '미지정');
+  const salesPlatform = normalizeSalesPlatformName(importMeta?.salesPlatform || row?.salesPlatform || row?.storePlatform || '미지정');
   const adPlatform = normalizeAdPlatformName(
+    importMeta?.adPlatform ||
     row?.adPlatform ||
     row?.platform ||
-    importMeta?.adPlatform ||
     salesPlatform ||
     importMeta?.salesPlatform ||
     ''
@@ -270,8 +270,8 @@ function buildResolvedRow(row) {
     salesPlatform: meta.salesPlatform,
     adPlatform: meta.adPlatform,
     platform: meta.adPlatform,
-    periodStart: meta.startDate || normalized.periodStart || '',
-    periodEnd: meta.endDate || meta.startDate || normalized.periodEnd || normalized.periodStart || ''
+    periodStart: meta.startDate || '',
+    periodEnd: meta.endDate || meta.startDate || ''
   };
 }
 
@@ -294,7 +294,8 @@ function rowMatchesPlatform(row, selectedPlatform) {
     safeText(row?.platform, ''),
     safeText(row?.salesPlatform, ''),
     safeText(row?.storePlatform, '')
-  ].includes(selectedPlatform);
+  ].map(v => normalizeAdPlatformName(v) || normalizeSalesPlatformName(v) || v)
+   .includes(normalizeAdPlatformName(selectedPlatform) || normalizeSalesPlatformName(selectedPlatform) || selectedPlatform);
 }
 
 function hydrateRowsFromImports(rows, imports) {
@@ -324,8 +325,16 @@ function hydrateRowsFromImports(rows, imports) {
 
 function getRowEffectiveDateRange(row) {
   const importMeta = getImportMetaById(row?.importId);
-  const start = row?.periodStart || importMeta?.startDate || '';
-  const end = row?.periodEnd || row?.periodStart || importMeta?.endDate || importMeta?.startDate || '';
+  const importStart = importMeta?.startDate || '';
+  const importEnd = importMeta?.endDate || importStart || '';
+  const rowStart = row?.periodStart || '';
+  const rowEnd = row?.periodEnd || rowStart || '';
+
+  // Import batch metadata is authoritative for rows that were brought in through
+  // column-mapping fallback dates or later edited in Imported batch management.
+  // This is especially important for Coupang files, which often rely on manual dates.
+  const start = importStart || rowStart || '';
+  const end = importEnd || rowEnd || start || '';
   return { start, end };
 }
 
@@ -1804,6 +1813,16 @@ function isWeeklySortTableId(tableId) {
   return ['selectedDataTable', 'previousWeekReportTable', 'currentWeekReportTable'].includes(String(tableId || ''));
 }
 
+
+function getDateFromWeek(year, week) {
+  const simple = new Date(year, 0, 1 + (week - 1) * 7);
+  const dow = simple.getDay();
+  const isoWeekStart = new Date(simple);
+  if (dow <= 4) isoWeekStart.setDate(simple.getDate() - simple.getDay() + 1);
+  else isoWeekStart.setDate(simple.getDate() + 8 - simple.getDay());
+  return isoWeekStart;
+}
+
 function renderSelectedDataPanel(rows) {
   const titleEl = document.getElementById('selectedDataTitle');
   const noteEl = document.getElementById('selectedDataNote');
@@ -1855,15 +1874,53 @@ function renderWeeklyReportPanels(rows) {
 }
 
 function renderWeekOverWeek(rows) {
-  const activeRange = getActiveRange(rows);
-  if (!rows.length || !activeRange.start) {
-    document.getElementById('wowRangeNote').textContent = 'No data is available for the selected date range.';
-    document.getElementById('wowTable').innerHTML = `<div class="empty">No creatives found for ROAS ≤ 300% analysis.</div>`;
+  const endInput = document.getElementById('endDateFilter').value;
+  let currentRange = null;
+
+  if (endInput) {
+    currentRange = getWeekRangeFromEndDate(endInput);
+  } else {
+    const info = getComparisonWeekKeys(rows);
+    if (info.currentWeek) {
+      const parts = String(info.currentWeek).split('-W');
+      if (parts.length === 2) {
+        const year = Number(parts[0]);
+        const weekNum = Number(parts[1]);
+        if (Number.isFinite(year) && Number.isFinite(weekNum)) {
+          const firstDay = getDateFromWeek(year, weekNum);
+          if (firstDay) {
+            const start = formatLocalIso(firstDay);
+            const end = addDays(start, 6);
+            currentRange = { start, end };
+          }
+        }
+      }
+    }
+  }
+
+  if (!rows.length || !currentRange?.start) {
+    document.getElementById('wowRangeNote').textContent = 'No Week data is available for the selected date range.';
+    document.getElementById('wowTable').innerHTML = `<div class="empty">No creatives found with ROAS ≤ 300% for Week.</div>`;
     return;
   }
 
-  document.getElementById('wowRangeNote').textContent = `${formatRangeTitle(activeRange.start, activeRange.end)} · creatives with ROAS ≤ 300%.`;
-  const grouped = summarizeGroupRows(getResolvedRows(rows), row => [safeText(getRowEffectiveDateRange(row).start || '-'), safeText(getRowEffectiveDateRange(row).end || getRowEffectiveDateRange(row).start || '-'), safeText(row.brand), safeText(row.salesPlatform || '-'), safeText(getRowPlatformValue(row)), safeText(row.campaignType || '-', '-'), safeText(row.campaign), safeText(row.adgroup), safeText(row.keyword)].join('||'))
+  const currentRows = getResolvedRows(rows).filter(row => {
+    const startDate = parseMaybeDate(currentRange.start);
+    const endDate = parseMaybeDate(currentRange.end);
+    return rowOverlaps(row, startDate, endDate);
+  });
+
+  const grouped = summarizeGroupRows(getCreativeAnalyticsRows(currentRows), row => [
+      safeText(getRowEffectiveDateRange(row).start || '-'),
+      safeText(getRowEffectiveDateRange(row).end || getRowEffectiveDateRange(row).start || '-'),
+      safeText(row.brand),
+      safeText(row.salesPlatform || '-'),
+      safeText(getRowPlatformValue(row)),
+      safeText(row.campaignType || '-', '-'),
+      safeText(row.campaign),
+      safeText(row.adgroup),
+      safeText(row.keyword)
+    ].join('||'))
     .map(item => {
       const [periodStart, periodEnd, brand, salesPlatform, adPlatform, campaignType, campaign, adgroup, keyword] = item.name.split('||');
       return {
@@ -1890,6 +1947,8 @@ function renderWeekOverWeek(rows) {
     .filter(row => row.cost > 0 && row.roas <= 300)
     .sort((a, b) => a.roas - b.roas || b.cost - a.cost);
 
+  document.getElementById('wowRangeNote').textContent = `${formatRangeTitle(currentRange.start, currentRange.end)} · Week rows with ROAS ≤ 300%.`;
+
   const columns = [
     { key: 'periodStart', label: 'Start date' },
     { key: 'periodEnd', label: 'End date' },
@@ -1910,7 +1969,7 @@ function renderWeekOverWeek(rows) {
     { key: 'cvr', label: 'CVR', render: v => formatPercent(v), num: true },
     { key: 'cpc', label: 'CPC', render: v => formatCurrency(v), num: true }
   ];
-  renderSimpleTable('wowTable', grouped, columns, 'No creatives found with ROAS ≤ 300% for the selected range.', { defaultSort: { key: 'roas', dir: 'asc' } });
+  renderSimpleTable('wowTable', grouped, columns, 'No creatives found with ROAS ≤ 300% for Week.', { defaultSort: { key: 'roas', dir: 'asc' } });
 }
 
 function renderInsights(rows, metrics) {
@@ -2183,6 +2242,15 @@ function rowOverlaps(row, startDate, endDate) {
   return true;
 }
 
+function isCoupangPlatformValue(value) {
+  return normalizeAdPlatformName(value) === 'Coupang' || normalizeSalesPlatformName(value) === 'Coupang';
+}
+
+function isCoupangRow(row) {
+  const meta = getResolvedRowMeta(row || {});
+  return isCoupangPlatformValue(meta.adPlatform) || isCoupangPlatformValue(meta.salesPlatform);
+}
+
 function hasMeaningfulKeyword(value) {
   const keyword = String(value || '').trim();
   return !!keyword && keyword !== '-' && keyword.toLowerCase() !== 'all' && keyword !== '전체';
@@ -2263,7 +2331,11 @@ function groupRowsByDimension(rows) {
 
 function getAnalyticsRows(rows) {
   if (!Array.isArray(rows) || !rows.length) return [];
-  const grouped = groupRowsByDimension(dedupeExactRows(getResolvedRows(rows)));
+  const resolvedRows = dedupeExactRows(getResolvedRows(rows));
+  const coupangRows = resolvedRows.filter(row => isCoupangRow(row));
+  const nonCoupangRows = resolvedRows.filter(row => !isCoupangRow(row));
+
+  const grouped = groupRowsByDimension(nonCoupangRows);
   const result = [];
   grouped.forEach(({ detail, summary }) => {
     if (summary.length) {
@@ -2273,12 +2345,17 @@ function getAnalyticsRows(rows) {
     }
     result.push(...detail);
   });
-  return result;
+
+  return result.concat(coupangRows);
 }
 
 function getCreativeAnalyticsRows(rows) {
   if (!Array.isArray(rows) || !rows.length) return [];
-  const grouped = groupRowsByDimension(dedupeExactRows(getResolvedRows(rows)));
+  const resolvedRows = dedupeExactRows(getResolvedRows(rows));
+  const coupangRows = resolvedRows.filter(row => isCoupangRow(row));
+  const nonCoupangRows = resolvedRows.filter(row => !isCoupangRow(row));
+
+  const grouped = groupRowsByDimension(nonCoupangRows);
   const result = [];
   grouped.forEach(({ detail, summary }) => {
     if (detail.length) {
@@ -2288,7 +2365,8 @@ function getCreativeAnalyticsRows(rows) {
     const summaryRow = aggregateMetricRows(summary, '-');
     if (summaryRow) result.push(summaryRow);
   });
-  return result;
+
+  return result.concat(coupangRows);
 }
 
 function applyFilters() {
@@ -2549,22 +2627,26 @@ async function normalizeImportedRows() {
     : null;
 
   const normalized = state.pending.dataRows.map((row, index) => {
+    const rawSalesPlatform = safeText(mapping.fixedSalesPlatform, '미지정');
+    const rawAdPlatform = safeText(mapping.fixedAdPlatform || mapping.fixedSalesPlatform, '미지정');
+    const rawBrand = safeText(mapping.fixedBrand, '미지정');
+    const normalizedSalesPlatform = normalizeSalesPlatformName(rawSalesPlatform);
+    const normalizedAdPlatform = normalizeAdPlatformName(rawAdPlatform || normalizedSalesPlatform);
+    const forceFixedDates = isCoupangPlatformValue(normalizedAdPlatform) && !!mapping.fixedStart;
+
     let start = '';
     let end = '';
 
-    if (mapping.dateColumn) {
+    if (forceFixedDates) {
+      start = mapping.fixedStart || '';
+      end = mapping.fixedEnd || mapping.fixedStart || '';
+    } else if (mapping.dateColumn) {
       start = parseDateValue(row[mapping.dateColumn]) || mapping.fixedStart || '';
       end = start;
     } else {
       start = mapping.startDateColumn ? (parseDateValue(row[mapping.startDateColumn]) || mapping.fixedStart || '') : (mapping.fixedStart || '');
       end = mapping.endDateColumn ? (parseDateValue(row[mapping.endDateColumn]) || start || mapping.fixedEnd || mapping.fixedStart || '') : (mapping.fixedEnd || start || mapping.fixedStart || '');
     }
-
-    const rawSalesPlatform = safeText(mapping.fixedSalesPlatform, '미지정');
-    const rawAdPlatform = safeText(mapping.fixedAdPlatform || mapping.fixedSalesPlatform, '미지정');
-    const rawBrand = safeText(mapping.fixedBrand, '미지정');
-    const normalizedSalesPlatform = normalizeSalesPlatformName(rawSalesPlatform);
-    const normalizedAdPlatform = normalizeAdPlatformName(rawAdPlatform || normalizedSalesPlatform);
 
     return {
       id: batchId + '_' + index,
@@ -2614,6 +2696,9 @@ async function normalizeImportedRows() {
   const dates = normalized.flatMap(row => [row.periodStart, row.periodEnd]).filter(Boolean).sort();
   const previousRows = state.rows.slice();
   const previousImports = state.imports.slice();
+  const importSalesPlatform = normalizeSalesPlatformName(mapping.fixedSalesPlatform);
+  const importAdPlatform = normalizeAdPlatformName(mapping.fixedAdPlatform || mapping.fixedSalesPlatform);
+  const forceFixedImportDates = isCoupangPlatformValue(importAdPlatform) && !!mapping.fixedStart;
   const nextImport = {
     id: batchId,
     createdAt: editingTarget?.createdAt || now,
@@ -2621,11 +2706,11 @@ async function normalizeImportedRows() {
     sheetName: editingTarget?.sheetName || state.pending.sheetName,
     memo: mapping.memo,
     brand: normalizeBrandName(mapping.fixedBrand),
-    salesPlatform: normalizeSalesPlatformName(mapping.fixedSalesPlatform),
-    adPlatform: normalizeAdPlatformName(mapping.fixedAdPlatform || mapping.fixedSalesPlatform),
+    salesPlatform: importSalesPlatform,
+    adPlatform: importAdPlatform,
     rowCount: normalized.length,
-    startDate: dates[0] || mapping.fixedStart || editingTarget?.startDate || '',
-    endDate: dates[dates.length - 1] || mapping.fixedEnd || editingTarget?.endDate || '',
+    startDate: forceFixedImportDates ? (mapping.fixedStart || editingTarget?.startDate || '') : (dates[0] || mapping.fixedStart || editingTarget?.startDate || ''),
+    endDate: forceFixedImportDates ? (mapping.fixedEnd || mapping.fixedStart || editingTarget?.endDate || '') : (dates[dates.length - 1] || mapping.fixedEnd || editingTarget?.endDate || ''),
     signature
   };
 
