@@ -102,6 +102,37 @@ function safeText(value, fallback = '-') {
   return text ? text : fallback;
 }
 
+function getObjectValueByNormalizedHeaders(source, candidates) {
+  if (!source || typeof source !== 'object') return '';
+  const entries = Object.entries(source);
+  for (const candidate of candidates) {
+    const normalizedCandidate = normalizeHeader(candidate);
+    const matched = entries.find(([key]) => normalizeHeader(key) === normalizedCandidate);
+    if (matched) return matched[1] ?? '';
+  }
+  for (const candidate of candidates) {
+    const normalizedCandidate = normalizeHeader(candidate);
+    const matched = entries.find(([key]) => {
+      const normalizedKey = normalizeHeader(key);
+      return normalizedKey.includes(normalizedCandidate) || normalizedCandidate.includes(normalizedKey)
+    });
+    if (matched) return matched[1] ?? '';
+  }
+  return '';
+}
+
+function getTodaysHouseProductName(row) {
+  return safeText(getObjectValueByNormalizedHeaders(row, ['상품명', '상품 명', 'product name', 'productname', 'item name', 'itemname']), '');
+}
+
+function getTodaysHouseProductId(row) {
+  return safeText(getObjectValueByNormalizedHeaders(row, ['상품ID', '상품 ID', 'product id', 'productid', 'item id', 'itemid', '상품번호', 'product_no']), '');
+}
+
+function isTodaysHousePlatformValue(value) {
+  return normalizeSalesPlatformName(value) === "Today's house" || normalizeAdPlatformName(value) === "Today's house";
+}
+
 function normalizeSalesPlatformName(value) {
   const text = String(value || '').trim();
   if (!text) return '';
@@ -2656,6 +2687,9 @@ async function normalizeImportedRows() {
     const normalizedSalesPlatform = normalizeSalesPlatformName(rawSalesPlatform);
     const normalizedAdPlatform = normalizeAdPlatformName(rawAdPlatform || normalizedSalesPlatform);
     const forceFixedDates = isCoupangPlatformValue(normalizedAdPlatform) && !!mapping.fixedStart;
+    const isTodaysHouse = isTodaysHousePlatformValue(normalizedSalesPlatform) || isTodaysHousePlatformValue(normalizedAdPlatform);
+    const todaysHouseProductName = isTodaysHouse ? getTodaysHouseProductName(row) : '';
+    const todaysHouseProductId = isTodaysHouse ? getTodaysHouseProductId(row) : '';
 
     let start = '';
     let end = '';
@@ -2683,7 +2717,7 @@ async function normalizeImportedRows() {
       periodStart: start || '',
       periodEnd: end || start || '',
       campaignType: mapping.campaignType ? safeText(row[mapping.campaignType]) : '-',
-      campaign: mapping.campaign ? safeText(row[mapping.campaign]) : '-',
+      campaign: isTodaysHouse ? (todaysHouseProductName || (mapping.campaign ? safeText(row[mapping.campaign]) : '-')) : (mapping.campaign ? safeText(row[mapping.campaign]) : '-'),
       adgroup: mapping.adgroup ? safeText(row[mapping.adgroup]) : '-',
       keyword: mapping.keyword ? safeText(row[mapping.keyword]) : '-',
       cost: toNumber(row[mapping.cost]),
@@ -2691,10 +2725,14 @@ async function normalizeImportedRows() {
       impressions: toNumber(row[mapping.impressions]),
       clicks: toNumber(row[mapping.clicks]),
       conversions: toNumber(row[mapping.conversions]),
+      todaysHouseProductId: todaysHouseProductId,
       createdAt: now
     };
   }).filter(row => {
     if (!row.periodStart) return false;
+    if (isTodaysHousePlatformValue(row.salesPlatform) || isTodaysHousePlatformValue(row.adPlatform)) {
+      if (!safeText(row.todaysHouseProductId, '')) return false;
+    }
     const hasMetrics = row.cost !== 0 || row.revenue !== 0 || row.impressions !== 0 || row.clicks !== 0 || row.conversions !== 0;
     const hasDimensions = [row.campaignType, row.campaign, row.adgroup, row.keyword].some(value => String(value || '').trim() && String(value).trim() !== '-');
     return hasMetrics || hasDimensions;
