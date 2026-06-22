@@ -102,70 +102,6 @@ function safeText(value, fallback = '-') {
   return text ? text : fallback;
 }
 
-function getObjectValueByNormalizedHeaders(source, candidates) {
-  if (!source || typeof source !== 'object') return '';
-  const entries = Object.entries(source);
-  for (const candidate of candidates) {
-    const normalizedCandidate = normalizeHeader(candidate);
-    const matched = entries.find(([key]) => normalizeHeader(key) === normalizedCandidate);
-    if (matched) return matched[1] ?? '';
-  }
-  for (const candidate of candidates) {
-    const normalizedCandidate = normalizeHeader(candidate);
-    const matched = entries.find(([key]) => {
-      const normalizedKey = normalizeHeader(key);
-      return normalizedKey.includes(normalizedCandidate) || normalizedCandidate.includes(normalizedKey)
-    });
-    if (matched) return matched[1] ?? '';
-  }
-  return '';
-}
-
-function getTodaysHouseProductName(row) {
-  return safeText(getObjectValueByNormalizedHeaders(row, [
-    '상품명', '상품 명', '광고상품명', '광고 상품명', '노출상품명', '노출 상품명',
-    '대표상품명', '대표 상품명', '상품명/id', '상품명(id)', '상품명 id',
-    'product name', 'productname', 'item name', 'itemname'
-  ]), '');
-}
-
-function getTodaysHouseProductId(row) {
-  return safeText(getObjectValueByNormalizedHeaders(row, [
-    '상품id', '상품 id', '상품번호', '상품 번호', '대표상품id', '대표 상품 id',
-    'product id', 'productid', 'item id', 'itemid', 'product_no'
-  ]), '');
-}
-
-function isTodaysHousePlatformValue(value) {
-  return normalizeSalesPlatformName(value) === "Today's house" || normalizeAdPlatformName(value) === "Today's house";
-}
-
-function hasTodaysHouseProductColumns(headers) {
-  const normalizedHeaders = (headers || []).map(normalizeHeader);
-  return normalizedHeaders.some(h => h.includes(normalizeHeader('상품명')) || h.includes(normalizeHeader('productname'))) &&
-         normalizedHeaders.some(h => h.includes(normalizeHeader('상품id')) || h.includes(normalizeHeader('productid')) || h.includes(normalizeHeader('상품번호')));
-}
-
-function autoDetectTodaysHouseProductField(headers) {
-  const candidates = ['상품명', '광고상품명', '노출상품명', '대표상품명', '상품명/ID', '상품명(ID)', 'product name', 'productname', 'item name'];
-  const headerList = headers || [];
-  for (const candidate of candidates) {
-    const matched = headerList.find(header => {
-      const normalizedHeader = normalizeHeader(header);
-      const normalizedCandidate = normalizeHeader(candidate);
-      return normalizedHeader === normalizedCandidate || normalizedHeader.includes(normalizedCandidate) || normalizedCandidate.includes(normalizedHeader);
-    });
-    if (matched) return matched;
-  }
-  return '';
-}
-
-function resolveTodaysHouseCampaignField(headers, fallbackField = '') {
-  const detected = autoDetectTodaysHouseProductField(headers);
-  if (detected) return detected;
-  return fallbackField || '';
-}
-
 function normalizeSalesPlatformName(value) {
   const text = String(value || '').trim();
   if (!text) return '';
@@ -248,8 +184,6 @@ function normalizeRowRecord(row) {
     campaign: safeText(row.campaign || '-'),
     adgroup: safeText(row.adgroup || '-'),
     keyword: safeText(row.keyword || '-'),
-    todaysHouseProductName: safeText(row.todaysHouseProductName || '', ''),
-    todaysHouseProductId: safeText(row.todaysHouseProductId || '', ''),
     cost: Number(row.cost || 0),
     revenue: Number(row.revenue || 0),
     impressions: Number(row.impressions || 0),
@@ -307,12 +241,12 @@ function getImportMetaById(importId) {
 
 function getResolvedRowMeta(row) {
   const importMeta = getImportMetaById(row?.importId);
-  const brand = normalizeBrandName(importMeta?.brand || row?.brand || '미지정');
-  const salesPlatform = normalizeSalesPlatformName(importMeta?.salesPlatform || row?.salesPlatform || row?.storePlatform || '미지정');
+  const brand = normalizeBrandName(row?.brand || importMeta?.brand || '미지정');
+  const salesPlatform = normalizeSalesPlatformName(row?.salesPlatform || row?.storePlatform || importMeta?.salesPlatform || '미지정');
   const adPlatform = normalizeAdPlatformName(
-    importMeta?.adPlatform ||
     row?.adPlatform ||
     row?.platform ||
+    importMeta?.adPlatform ||
     salesPlatform ||
     importMeta?.salesPlatform ||
     ''
@@ -330,16 +264,14 @@ function getResolvedRowMeta(row) {
 function buildResolvedRow(row) {
   const normalized = normalizeRowRecord(row || {});
   const meta = getResolvedRowMeta(normalized);
-  const isTodaysHouse = isTodaysHousePlatformValue(meta.salesPlatform) || isTodaysHousePlatformValue(meta.adPlatform);
   return {
     ...normalized,
     brand: meta.brand,
     salesPlatform: meta.salesPlatform,
     adPlatform: meta.adPlatform,
     platform: meta.adPlatform,
-    campaign: isTodaysHouse ? (normalized.todaysHouseProductName || normalized.campaign) : normalized.campaign,
-    periodStart: meta.startDate || '',
-    periodEnd: meta.endDate || meta.startDate || ''
+    periodStart: meta.startDate || normalized.periodStart || '',
+    periodEnd: meta.endDate || meta.startDate || normalized.periodEnd || normalized.periodStart || ''
   };
 }
 
@@ -362,8 +294,7 @@ function rowMatchesPlatform(row, selectedPlatform) {
     safeText(row?.platform, ''),
     safeText(row?.salesPlatform, ''),
     safeText(row?.storePlatform, '')
-  ].map(v => normalizeAdPlatformName(v) || normalizeSalesPlatformName(v) || v)
-   .includes(normalizeAdPlatformName(selectedPlatform) || normalizeSalesPlatformName(selectedPlatform) || selectedPlatform);
+  ].includes(selectedPlatform);
 }
 
 function hydrateRowsFromImports(rows, imports) {
@@ -393,16 +324,8 @@ function hydrateRowsFromImports(rows, imports) {
 
 function getRowEffectiveDateRange(row) {
   const importMeta = getImportMetaById(row?.importId);
-  const importStart = importMeta?.startDate || '';
-  const importEnd = importMeta?.endDate || importStart || '';
-  const rowStart = row?.periodStart || '';
-  const rowEnd = row?.periodEnd || rowStart || '';
-
-  // Import batch metadata is authoritative for rows that were brought in through
-  // column-mapping fallback dates or later edited in Imported batch management.
-  // This is especially important for Coupang files, which often rely on manual dates.
-  const start = importStart || rowStart || '';
-  const end = importEnd || rowEnd || start || '';
+  const start = row?.periodStart || importMeta?.startDate || '';
+  const end = row?.periodEnd || row?.periodStart || importMeta?.endDate || importMeta?.startDate || '';
   return { start, end };
 }
 
@@ -1881,16 +1804,6 @@ function isWeeklySortTableId(tableId) {
   return ['selectedDataTable', 'previousWeekReportTable', 'currentWeekReportTable'].includes(String(tableId || ''));
 }
 
-
-function getDateFromWeek(year, week) {
-  const simple = new Date(year, 0, 1 + (week - 1) * 7);
-  const dow = simple.getDay();
-  const isoWeekStart = new Date(simple);
-  if (dow <= 4) isoWeekStart.setDate(simple.getDate() - simple.getDay() + 1);
-  else isoWeekStart.setDate(simple.getDate() + 8 - simple.getDay());
-  return isoWeekStart;
-}
-
 function renderSelectedDataPanel(rows) {
   const titleEl = document.getElementById('selectedDataTitle');
   const noteEl = document.getElementById('selectedDataNote');
@@ -1942,65 +1855,40 @@ function renderWeeklyReportPanels(rows) {
 }
 
 function renderWeekOverWeek(rows) {
-  const endInput = document.getElementById('endDateFilter').value;
-  let currentRange = null;
-
-  if (endInput) {
-    currentRange = getWeekRangeFromEndDate(endInput);
-  } else {
-    const info = getComparisonWeekKeys(rows);
-    if (info.currentWeek) {
-      const parts = String(info.currentWeek).split('-W');
-      if (parts.length === 2) {
-        const year = Number(parts[0]);
-        const weekNum = Number(parts[1]);
-        if (Number.isFinite(year) && Number.isFinite(weekNum)) {
-          const firstDay = getDateFromWeek(year, weekNum);
-          if (firstDay) {
-            const start = formatLocalIso(firstDay);
-            const end = addDays(start, 6);
-            currentRange = { start, end };
-          }
-        }
-      }
-    }
-  }
-
-  if (!rows.length || !currentRange?.start) {
-    document.getElementById('wowRangeNote').textContent = 'No Week data is available for the selected date range.';
-    document.getElementById('wowTable').innerHTML = `<div class="empty">No rows found with ROAS ≤ 300% for Week.</div>`;
+  const activeRange = getActiveRange(rows);
+  if (!rows.length || !activeRange.start) {
+    document.getElementById('wowRangeNote').textContent = 'No data is available for the selected date range.';
+    document.getElementById('wowTable').innerHTML = `<div class="empty">No creatives found for ROAS ≤ 300% analysis.</div>`;
     return;
   }
 
-  const groupedData = buildWeeklyCampaignGroups(rows, '', currentRange);
-  const flattened = [];
-  groupedData.groups.forEach(group => {
-    group.details.forEach(detail => {
-      if (!(detail.cost > 0 && detail.roas <= 300)) return;
-      flattened.push({
-        periodStart: currentRange.start,
-        periodEnd: currentRange.end,
-        brand: group.brand,
-        salesPlatform: group.salesPlatform,
-        adPlatform: group.adPlatform,
-        campaignType: group.campaignType,
-        campaign: group.campaign,
-        adgroup: detail.adgroup,
-        cost: detail.cost,
-        revenue: detail.revenue,
-        roas: detail.roas,
-        impressions: detail.impressions,
-        clicks: detail.clicks,
-        conversions: detail.conversions,
-        ctr: detail.ctr,
-        cvr: detail.cvr,
-        cpc: detail.cpc
-      });
-    });
-  });
-
-  flattened.sort((a, b) => a.roas - b.roas || b.cost - a.cost);
-  document.getElementById('wowRangeNote').textContent = `${formatRangeTitle(currentRange.start, currentRange.end)} · Week table rows with ROAS ≤ 300%.`;
+  document.getElementById('wowRangeNote').textContent = `${formatRangeTitle(activeRange.start, activeRange.end)} · creatives with ROAS ≤ 300%.`;
+  const grouped = summarizeGroupRows(getResolvedRows(rows), row => [safeText(getRowEffectiveDateRange(row).start || '-'), safeText(getRowEffectiveDateRange(row).end || getRowEffectiveDateRange(row).start || '-'), safeText(row.brand), safeText(row.salesPlatform || '-'), safeText(getRowPlatformValue(row)), safeText(row.campaignType || '-', '-'), safeText(row.campaign), safeText(row.adgroup), safeText(row.keyword)].join('||'))
+    .map(item => {
+      const [periodStart, periodEnd, brand, salesPlatform, adPlatform, campaignType, campaign, adgroup, keyword] = item.name.split('||');
+      return {
+        periodStart,
+        periodEnd,
+        brand,
+        salesPlatform,
+        adPlatform,
+        campaignType,
+        campaign,
+        adgroup,
+        keyword,
+        cost: item.cost,
+        revenue: item.revenue,
+        roas: item.roas,
+        impressions: item.impressions,
+        clicks: item.clicks,
+        conversions: item.conversions,
+        ctr: item.ctr,
+        cvr: item.cvr,
+        cpc: item.cpc
+      };
+    })
+    .filter(row => row.cost > 0 && row.roas <= 300)
+    .sort((a, b) => a.roas - b.roas || b.cost - a.cost);
 
   const columns = [
     { key: 'periodStart', label: 'Start date' },
@@ -2011,6 +1899,7 @@ function renderWeekOverWeek(rows) {
     { key: 'campaignType', label: 'Campaign type' },
     { key: 'campaign', label: 'Campaign' },
     { key: 'adgroup', label: 'Ad group' },
+    { key: 'keyword', label: 'Creative' },
     { key: 'cost', label: 'Cost', render: v => formatCurrency(v), num: true },
     { key: 'revenue', label: 'Revenue', render: v => formatCurrency(v), num: true },
     { key: 'roas', label: 'ROAS', render: v => formatPercent(v), num: true },
@@ -2021,7 +1910,7 @@ function renderWeekOverWeek(rows) {
     { key: 'cvr', label: 'CVR', render: v => formatPercent(v), num: true },
     { key: 'cpc', label: 'CPC', render: v => formatCurrency(v), num: true }
   ];
-  renderSimpleTable('wowTable', flattened, columns, 'No Week table rows found with ROAS ≤ 300%.', { defaultSort: { key: 'roas', dir: 'asc' } });
+  renderSimpleTable('wowTable', grouped, columns, 'No creatives found with ROAS ≤ 300% for the selected range.', { defaultSort: { key: 'roas', dir: 'asc' } });
 }
 
 function renderInsights(rows, metrics) {
@@ -2294,15 +2183,6 @@ function rowOverlaps(row, startDate, endDate) {
   return true;
 }
 
-function isCoupangPlatformValue(value) {
-  return normalizeAdPlatformName(value) === 'Coupang' || normalizeSalesPlatformName(value) === 'Coupang';
-}
-
-function isCoupangRow(row) {
-  const meta = getResolvedRowMeta(row || {});
-  return isCoupangPlatformValue(meta.adPlatform) || isCoupangPlatformValue(meta.salesPlatform);
-}
-
 function hasMeaningfulKeyword(value) {
   const keyword = String(value || '').trim();
   return !!keyword && keyword !== '-' && keyword.toLowerCase() !== 'all' && keyword !== '전체';
@@ -2381,52 +2261,9 @@ function groupRowsByDimension(rows) {
   return groups;
 }
 
-function aggregateCoupangRowsByDimension(rows) {
-  const grouped = new Map();
-  rows.forEach(row => {
-    const key = dimensionKeyWithoutKeyword(row);
-    if (!grouped.has(key)) grouped.set(key, []);
-    grouped.get(key).push(row);
-  });
-
-  const result = [];
-  grouped.forEach(items => {
-    if (!items.length) return;
-    const base = { ...items[0] };
-    const range = getRowEffectiveDateRange(base);
-    const traffic = items.reduce((acc, row) => {
-      acc.cost += Number(row.cost || 0);
-      acc.impressions += Number(row.impressions || 0);
-      acc.clicks += Number(row.clicks || 0);
-      return acc;
-    }, { cost: 0, impressions: 0, clicks: 0 });
-
-    const revenue = Math.max(...items.map(row => Number(row.revenue || 0)), 0);
-    const conversions = Math.max(...items.map(row => Number(row.conversions || 0)), 0);
-
-    result.push({
-      ...base,
-      periodStart: range.start,
-      periodEnd: range.end || range.start,
-      keyword: '-',
-      cost: traffic.cost,
-      revenue,
-      impressions: traffic.impressions,
-      clicks: traffic.clicks,
-      conversions
-    });
-  });
-
-  return result;
-}
-
 function getAnalyticsRows(rows) {
   if (!Array.isArray(rows) || !rows.length) return [];
-  const resolvedRows = dedupeExactRows(getResolvedRows(rows));
-  const coupangRows = resolvedRows.filter(row => isCoupangRow(row));
-  const nonCoupangRows = resolvedRows.filter(row => !isCoupangRow(row));
-
-  const grouped = groupRowsByDimension(nonCoupangRows);
+  const grouped = groupRowsByDimension(dedupeExactRows(getResolvedRows(rows)));
   const result = [];
   grouped.forEach(({ detail, summary }) => {
     if (summary.length) {
@@ -2436,17 +2273,12 @@ function getAnalyticsRows(rows) {
     }
     result.push(...detail);
   });
-
-  return result.concat(aggregateCoupangRowsByDimension(coupangRows));
+  return result;
 }
 
 function getCreativeAnalyticsRows(rows) {
   if (!Array.isArray(rows) || !rows.length) return [];
-  const resolvedRows = dedupeExactRows(getResolvedRows(rows));
-  const coupangRows = resolvedRows.filter(row => isCoupangRow(row));
-  const nonCoupangRows = resolvedRows.filter(row => !isCoupangRow(row));
-
-  const grouped = groupRowsByDimension(nonCoupangRows);
+  const grouped = groupRowsByDimension(dedupeExactRows(getResolvedRows(rows)));
   const result = [];
   grouped.forEach(({ detail, summary }) => {
     if (detail.length) {
@@ -2456,8 +2288,7 @@ function getCreativeAnalyticsRows(rows) {
     const summaryRow = aggregateMetricRows(summary, '-');
     if (summaryRow) result.push(summaryRow);
   });
-
-  return result.concat(aggregateCoupangRowsByDimension(coupangRows));
+  return result;
 }
 
 function applyFilters() {
@@ -2587,7 +2418,7 @@ function openMappingModal(pending) {
   populateSelect('mappingClicks', headers, autoDetectField(headers, 'clicks'));
   populateSelect('mappingConversions', headers, autoDetectField(headers, 'conversions'));
   populateSelect('mappingCampaignType', headers, autoDetectField(headers, 'campaignType'));
-  populateSelect('mappingCampaign', headers, todaysHouseDetected ? resolveTodaysHouseCampaignField(headers, autoDetectField(headers, 'campaign')) : autoDetectField(headers, 'campaign'));
+  populateSelect('mappingCampaign', headers, autoDetectField(headers, 'campaign'));
   populateSelect('mappingAdgroup', headers, autoDetectField(headers, 'adgroup'));
   populateSelect('mappingKeyword', headers, autoDetectField(headers, 'keyword'));
 
@@ -2598,8 +2429,6 @@ function openMappingModal(pending) {
   const guessedAdPlatform = pending.prefill?.fixedAdPlatform || inferredMeta.adPlatform || guessAdPlatformName(pending.fileName, pending.headers, pending.dataRows) || '';
   const guessedSalesPlatform = pending.prefill?.fixedSalesPlatform || inferredMeta.salesPlatform || inferSalesPlatformFromAdPlatform(guessedAdPlatform) || '';
   const guessedBrand = pending.prefill?.fixedBrand || inferredMeta.brand || '';
-  const todaysHouseDetected = isTodaysHousePlatformValue(guessedSalesPlatform) || isTodaysHousePlatformValue(guessedAdPlatform) || hasTodaysHouseProductColumns(headers);
-  const todaysHouseCampaignField = autoDetectTodaysHouseProductField(headers);
 
   setFixedFieldOptions('mappingFixedBrand', PRESET_BRANDS, guessedBrand, 'Select brand');
   setFixedFieldOptions('mappingFixedSalesPlatform', PRESET_SALES_PLATFORMS, guessedSalesPlatform, 'Select sales platform');
@@ -2616,7 +2445,7 @@ function openMappingModal(pending) {
     populateSelect('mappingClicks', headers, pending.prefill.clicks || autoDetectField(headers, 'clicks'));
     populateSelect('mappingConversions', headers, pending.prefill.conversions || autoDetectField(headers, 'conversions'));
     populateSelect('mappingCampaignType', headers, pending.prefill.campaignType || autoDetectField(headers, 'campaignType'));
-    populateSelect('mappingCampaign', headers, todaysHouseDetected ? resolveTodaysHouseCampaignField(headers, pending.prefill.campaign || autoDetectField(headers, 'campaign')) : (pending.prefill.campaign || autoDetectField(headers, 'campaign')));
+    populateSelect('mappingCampaign', headers, pending.prefill.campaign || autoDetectField(headers, 'campaign'));
     populateSelect('mappingAdgroup', headers, pending.prefill.adgroup || autoDetectField(headers, 'adgroup'));
     populateSelect('mappingKeyword', headers, pending.prefill.keyword || autoDetectField(headers, 'keyword'));
     document.getElementById('mappingFixedStart').value = pending.prefill.fixedStart || dateRange.start || '';
@@ -2720,30 +2549,22 @@ async function normalizeImportedRows() {
     : null;
 
   const normalized = state.pending.dataRows.map((row, index) => {
-    const rawSalesPlatform = safeText(mapping.fixedSalesPlatform, '미지정');
-    const rawAdPlatform = safeText(mapping.fixedAdPlatform || mapping.fixedSalesPlatform, '미지정');
-    const rawBrand = safeText(mapping.fixedBrand, '미지정');
-    const normalizedSalesPlatform = normalizeSalesPlatformName(rawSalesPlatform);
-    const normalizedAdPlatform = normalizeAdPlatformName(rawAdPlatform || normalizedSalesPlatform);
-    const forceFixedDates = isCoupangPlatformValue(normalizedAdPlatform) && !!mapping.fixedStart;
-    const isTodaysHouse = isTodaysHousePlatformValue(normalizedSalesPlatform) || isTodaysHousePlatformValue(normalizedAdPlatform) || hasTodaysHouseProductColumns(state.pending.headers) || String(state.pending.fileName || '').includes('오늘의집');
-    const todaysHouseCampaignField = isTodaysHouse ? resolveTodaysHouseCampaignField(state.pending.headers, mapping.campaign) : '';
-    const todaysHouseProductName = isTodaysHouse ? safeText(row[todaysHouseCampaignField] ?? getTodaysHouseProductName(row), '') : '';
-    const todaysHouseProductId = isTodaysHouse ? getTodaysHouseProductId(row) : '';
-
     let start = '';
     let end = '';
 
-    if (forceFixedDates) {
-      start = mapping.fixedStart || '';
-      end = mapping.fixedEnd || mapping.fixedStart || '';
-    } else if (mapping.dateColumn) {
+    if (mapping.dateColumn) {
       start = parseDateValue(row[mapping.dateColumn]) || mapping.fixedStart || '';
       end = start;
     } else {
       start = mapping.startDateColumn ? (parseDateValue(row[mapping.startDateColumn]) || mapping.fixedStart || '') : (mapping.fixedStart || '');
       end = mapping.endDateColumn ? (parseDateValue(row[mapping.endDateColumn]) || start || mapping.fixedEnd || mapping.fixedStart || '') : (mapping.fixedEnd || start || mapping.fixedStart || '');
     }
+
+    const rawSalesPlatform = safeText(mapping.fixedSalesPlatform, '미지정');
+    const rawAdPlatform = safeText(mapping.fixedAdPlatform || mapping.fixedSalesPlatform, '미지정');
+    const rawBrand = safeText(mapping.fixedBrand, '미지정');
+    const normalizedSalesPlatform = normalizeSalesPlatformName(rawSalesPlatform);
+    const normalizedAdPlatform = normalizeAdPlatformName(rawAdPlatform || normalizedSalesPlatform);
 
     return {
       id: batchId + '_' + index,
@@ -2757,11 +2578,9 @@ async function normalizeImportedRows() {
       periodStart: start || '',
       periodEnd: end || start || '',
       campaignType: mapping.campaignType ? safeText(row[mapping.campaignType]) : '-',
-      campaign: isTodaysHouse ? (todaysHouseProductName || (mapping.campaign ? safeText(row[mapping.campaign]) : '-')) : (mapping.campaign ? safeText(row[mapping.campaign]) : '-'),
+      campaign: mapping.campaign ? safeText(row[mapping.campaign]) : '-',
       adgroup: mapping.adgroup ? safeText(row[mapping.adgroup]) : '-',
       keyword: mapping.keyword ? safeText(row[mapping.keyword]) : '-',
-      todaysHouseProductName: todaysHouseProductName,
-      todaysHouseProductId: todaysHouseProductId,
       cost: toNumber(row[mapping.cost]),
       revenue: toNumber(row[mapping.revenue]),
       impressions: toNumber(row[mapping.impressions]),
@@ -2771,19 +2590,10 @@ async function normalizeImportedRows() {
     };
   }).filter(row => {
     if (!row.periodStart) return false;
-    if (isTodaysHousePlatformValue(row.salesPlatform) || isTodaysHousePlatformValue(row.adPlatform)) {
-      if (!safeText(row.todaysHouseProductId, '')) return false;
-      if (!safeText(row.todaysHouseProductName, '')) return false;
-    }
     const hasMetrics = row.cost !== 0 || row.revenue !== 0 || row.impressions !== 0 || row.clicks !== 0 || row.conversions !== 0;
     const hasDimensions = [row.campaignType, row.campaign, row.adgroup, row.keyword].some(value => String(value || '').trim() && String(value).trim() !== '-');
     return hasMetrics || hasDimensions;
   });
-
-  if ((isTodaysHousePlatformValue(mapping.fixedSalesPlatform) || isTodaysHousePlatformValue(mapping.fixedAdPlatform)) && !resolveTodaysHouseCampaignField(state.pending.headers, mapping.campaign)) {
-    alert('오늘의집 파일에서는 campaign에 넣을 상품명 컬럼을 찾지 못했습니다. 상품명 컬럼이 포함된 raw data 파일인지 확인해 주세요.');
-    return;
-  }
 
   if (!normalized.length) {
     alert('가져올 수 있는 유효한 행이 없습니다. 날짜 및 지표 컬럼 매핑을 다시 확인해 주세요.');
@@ -2804,9 +2614,6 @@ async function normalizeImportedRows() {
   const dates = normalized.flatMap(row => [row.periodStart, row.periodEnd]).filter(Boolean).sort();
   const previousRows = state.rows.slice();
   const previousImports = state.imports.slice();
-  const importSalesPlatform = normalizeSalesPlatformName(mapping.fixedSalesPlatform);
-  const importAdPlatform = normalizeAdPlatformName(mapping.fixedAdPlatform || mapping.fixedSalesPlatform);
-  const forceFixedImportDates = isCoupangPlatformValue(importAdPlatform) && !!mapping.fixedStart;
   const nextImport = {
     id: batchId,
     createdAt: editingTarget?.createdAt || now,
@@ -2814,30 +2621,17 @@ async function normalizeImportedRows() {
     sheetName: editingTarget?.sheetName || state.pending.sheetName,
     memo: mapping.memo,
     brand: normalizeBrandName(mapping.fixedBrand),
-    salesPlatform: importSalesPlatform,
-    adPlatform: importAdPlatform,
+    salesPlatform: normalizeSalesPlatformName(mapping.fixedSalesPlatform),
+    adPlatform: normalizeAdPlatformName(mapping.fixedAdPlatform || mapping.fixedSalesPlatform),
     rowCount: normalized.length,
-    startDate: forceFixedImportDates ? (mapping.fixedStart || editingTarget?.startDate || '') : (dates[0] || mapping.fixedStart || editingTarget?.startDate || ''),
-    endDate: forceFixedImportDates ? (mapping.fixedEnd || mapping.fixedStart || editingTarget?.endDate || '') : (dates[dates.length - 1] || mapping.fixedEnd || editingTarget?.endDate || ''),
+    startDate: dates[0] || mapping.fixedStart || editingTarget?.startDate || '',
+    endDate: dates[dates.length - 1] || mapping.fixedEnd || editingTarget?.endDate || '',
     signature
   };
-
-  const duplicateImport = !state.editingImportId
-    ? state.imports.find(item =>
-        normalizeUnicodeNfc(item.fileName || '') === nextImport.fileName &&
-        normalizeUnicodeNfc(item.sheetName || '') === nextImport.sheetName &&
-        normalizeBrandName(item.brand || '') === nextImport.brand &&
-        normalizeSalesPlatformName(item.salesPlatform || '') === nextImport.salesPlatform &&
-        normalizeAdPlatformName(item.adPlatform || item.salesPlatform || '') === nextImport.adPlatform
-      ) || null
-    : null;
 
   if (state.editingImportId) {
     state.rows = state.rows.filter(row => row.importId !== state.editingImportId).concat(normalized);
     state.imports = state.imports.map(item => item.id === state.editingImportId ? nextImport : item);
-  } else if (duplicateImport) {
-    state.rows = state.rows.filter(row => row.importId !== duplicateImport.id).concat(normalized);
-    state.imports = state.imports.map(item => item.id === duplicateImport.id ? { ...nextImport, id: duplicateImport.id, createdAt: duplicateImport.createdAt || now } : item);
   } else {
     state.rows = state.rows.concat(normalized);
     state.imports.push(nextImport);
