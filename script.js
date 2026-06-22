@@ -1900,54 +1900,39 @@ function renderWeekOverWeek(rows) {
 
   if (!rows.length || !currentRange?.start) {
     document.getElementById('wowRangeNote').textContent = 'No Week data is available for the selected date range.';
-    document.getElementById('wowTable').innerHTML = `<div class="empty">No creatives found with ROAS ≤ 300% for Week.</div>`;
+    document.getElementById('wowTable').innerHTML = `<div class="empty">No rows found with ROAS ≤ 300% for Week.</div>`;
     return;
   }
 
-  const currentRows = getResolvedRows(rows).filter(row => {
-    const startDate = parseMaybeDate(currentRange.start);
-    const endDate = parseMaybeDate(currentRange.end);
-    return rowOverlaps(row, startDate, endDate);
+  const groupedData = buildWeeklyCampaignGroups(rows, '', currentRange);
+  const flattened = [];
+  groupedData.groups.forEach(group => {
+    group.details.forEach(detail => {
+      if (!(detail.cost > 0 && detail.roas <= 300)) return;
+      flattened.push({
+        periodStart: currentRange.start,
+        periodEnd: currentRange.end,
+        brand: group.brand,
+        salesPlatform: group.salesPlatform,
+        adPlatform: group.adPlatform,
+        campaignType: group.campaignType,
+        campaign: group.campaign,
+        adgroup: detail.adgroup,
+        cost: detail.cost,
+        revenue: detail.revenue,
+        roas: detail.roas,
+        impressions: detail.impressions,
+        clicks: detail.clicks,
+        conversions: detail.conversions,
+        ctr: detail.ctr,
+        cvr: detail.cvr,
+        cpc: detail.cpc
+      });
+    });
   });
 
-  const grouped = summarizeGroupRows(getCreativeAnalyticsRows(currentRows), row => [
-      safeText(getRowEffectiveDateRange(row).start || '-'),
-      safeText(getRowEffectiveDateRange(row).end || getRowEffectiveDateRange(row).start || '-'),
-      safeText(row.brand),
-      safeText(row.salesPlatform || '-'),
-      safeText(getRowPlatformValue(row)),
-      safeText(row.campaignType || '-', '-'),
-      safeText(row.campaign),
-      safeText(row.adgroup),
-      safeText(row.keyword)
-    ].join('||'))
-    .map(item => {
-      const [periodStart, periodEnd, brand, salesPlatform, adPlatform, campaignType, campaign, adgroup, keyword] = item.name.split('||');
-      return {
-        periodStart,
-        periodEnd,
-        brand,
-        salesPlatform,
-        adPlatform,
-        campaignType,
-        campaign,
-        adgroup,
-        keyword,
-        cost: item.cost,
-        revenue: item.revenue,
-        roas: item.roas,
-        impressions: item.impressions,
-        clicks: item.clicks,
-        conversions: item.conversions,
-        ctr: item.ctr,
-        cvr: item.cvr,
-        cpc: item.cpc
-      };
-    })
-    .filter(row => row.cost > 0 && row.roas <= 300)
-    .sort((a, b) => a.roas - b.roas || b.cost - a.cost);
-
-  document.getElementById('wowRangeNote').textContent = `${formatRangeTitle(currentRange.start, currentRange.end)} · Week rows with ROAS ≤ 300%.`;
+  flattened.sort((a, b) => a.roas - b.roas || b.cost - a.cost);
+  document.getElementById('wowRangeNote').textContent = `${formatRangeTitle(currentRange.start, currentRange.end)} · Week table rows with ROAS ≤ 300%.`;
 
   const columns = [
     { key: 'periodStart', label: 'Start date' },
@@ -1958,7 +1943,6 @@ function renderWeekOverWeek(rows) {
     { key: 'campaignType', label: 'Campaign type' },
     { key: 'campaign', label: 'Campaign' },
     { key: 'adgroup', label: 'Ad group' },
-    { key: 'keyword', label: 'Creative' },
     { key: 'cost', label: 'Cost', render: v => formatCurrency(v), num: true },
     { key: 'revenue', label: 'Revenue', render: v => formatCurrency(v), num: true },
     { key: 'roas', label: 'ROAS', render: v => formatPercent(v), num: true },
@@ -1969,7 +1953,7 @@ function renderWeekOverWeek(rows) {
     { key: 'cvr', label: 'CVR', render: v => formatPercent(v), num: true },
     { key: 'cpc', label: 'CPC', render: v => formatCurrency(v), num: true }
   ];
-  renderSimpleTable('wowTable', grouped, columns, 'No creatives found with ROAS ≤ 300% for Week.', { defaultSort: { key: 'roas', dir: 'asc' } });
+  renderSimpleTable('wowTable', flattened, columns, 'No Week table rows found with ROAS ≤ 300%.', { defaultSort: { key: 'roas', dir: 'asc' } });
 }
 
 function renderInsights(rows, metrics) {
@@ -2329,6 +2313,45 @@ function groupRowsByDimension(rows) {
   return groups;
 }
 
+function aggregateCoupangRowsByDimension(rows) {
+  const grouped = new Map();
+  rows.forEach(row => {
+    const key = dimensionKeyWithoutKeyword(row);
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push(row);
+  });
+
+  const result = [];
+  grouped.forEach(items => {
+    if (!items.length) return;
+    const base = { ...items[0] };
+    const range = getRowEffectiveDateRange(base);
+    const traffic = items.reduce((acc, row) => {
+      acc.cost += Number(row.cost || 0);
+      acc.impressions += Number(row.impressions || 0);
+      acc.clicks += Number(row.clicks || 0);
+      return acc;
+    }, { cost: 0, impressions: 0, clicks: 0 });
+
+    const revenue = Math.max(...items.map(row => Number(row.revenue || 0)), 0);
+    const conversions = Math.max(...items.map(row => Number(row.conversions || 0)), 0);
+
+    result.push({
+      ...base,
+      periodStart: range.start,
+      periodEnd: range.end || range.start,
+      keyword: '-',
+      cost: traffic.cost,
+      revenue,
+      impressions: traffic.impressions,
+      clicks: traffic.clicks,
+      conversions
+    });
+  });
+
+  return result;
+}
+
 function getAnalyticsRows(rows) {
   if (!Array.isArray(rows) || !rows.length) return [];
   const resolvedRows = dedupeExactRows(getResolvedRows(rows));
@@ -2346,7 +2369,7 @@ function getAnalyticsRows(rows) {
     result.push(...detail);
   });
 
-  return result.concat(coupangRows);
+  return result.concat(aggregateCoupangRowsByDimension(coupangRows));
 }
 
 function getCreativeAnalyticsRows(rows) {
@@ -2366,7 +2389,7 @@ function getCreativeAnalyticsRows(rows) {
     if (summaryRow) result.push(summaryRow);
   });
 
-  return result.concat(coupangRows);
+  return result.concat(aggregateCoupangRowsByDimension(coupangRows));
 }
 
 function applyFilters() {
@@ -2714,9 +2737,22 @@ async function normalizeImportedRows() {
     signature
   };
 
+  const duplicateImport = !state.editingImportId
+    ? state.imports.find(item =>
+        normalizeUnicodeNfc(item.fileName || '') === nextImport.fileName &&
+        normalizeUnicodeNfc(item.sheetName || '') === nextImport.sheetName &&
+        normalizeBrandName(item.brand || '') === nextImport.brand &&
+        normalizeSalesPlatformName(item.salesPlatform || '') === nextImport.salesPlatform &&
+        normalizeAdPlatformName(item.adPlatform || item.salesPlatform || '') === nextImport.adPlatform
+      ) || null
+    : null;
+
   if (state.editingImportId) {
     state.rows = state.rows.filter(row => row.importId !== state.editingImportId).concat(normalized);
     state.imports = state.imports.map(item => item.id === state.editingImportId ? nextImport : item);
+  } else if (duplicateImport) {
+    state.rows = state.rows.filter(row => row.importId !== duplicateImport.id).concat(normalized);
+    state.imports = state.imports.map(item => item.id === duplicateImport.id ? { ...nextImport, id: duplicateImport.id, createdAt: duplicateImport.createdAt || now } : item);
   } else {
     state.rows = state.rows.concat(normalized);
     state.imports.push(nextImport);
