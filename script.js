@@ -160,6 +160,12 @@ function autoDetectTodaysHouseProductField(headers) {
   return '';
 }
 
+function resolveTodaysHouseCampaignField(headers, fallbackField = '') {
+  const detected = autoDetectTodaysHouseProductField(headers);
+  if (detected) return detected;
+  return fallbackField || '';
+}
+
 function normalizeSalesPlatformName(value) {
   const text = String(value || '').trim();
   if (!text) return '';
@@ -2581,7 +2587,7 @@ function openMappingModal(pending) {
   populateSelect('mappingClicks', headers, autoDetectField(headers, 'clicks'));
   populateSelect('mappingConversions', headers, autoDetectField(headers, 'conversions'));
   populateSelect('mappingCampaignType', headers, autoDetectField(headers, 'campaignType'));
-  populateSelect('mappingCampaign', headers, todaysHouseDetected ? (todaysHouseCampaignField || autoDetectField(headers, 'campaign')) : autoDetectField(headers, 'campaign'));
+  populateSelect('mappingCampaign', headers, todaysHouseDetected ? resolveTodaysHouseCampaignField(headers, autoDetectField(headers, 'campaign')) : autoDetectField(headers, 'campaign'));
   populateSelect('mappingAdgroup', headers, autoDetectField(headers, 'adgroup'));
   populateSelect('mappingKeyword', headers, autoDetectField(headers, 'keyword'));
 
@@ -2610,7 +2616,7 @@ function openMappingModal(pending) {
     populateSelect('mappingClicks', headers, pending.prefill.clicks || autoDetectField(headers, 'clicks'));
     populateSelect('mappingConversions', headers, pending.prefill.conversions || autoDetectField(headers, 'conversions'));
     populateSelect('mappingCampaignType', headers, pending.prefill.campaignType || autoDetectField(headers, 'campaignType'));
-    populateSelect('mappingCampaign', headers, pending.prefill.campaign || (todaysHouseDetected ? (todaysHouseCampaignField || autoDetectField(headers, 'campaign')) : autoDetectField(headers, 'campaign')));
+    populateSelect('mappingCampaign', headers, todaysHouseDetected ? resolveTodaysHouseCampaignField(headers, pending.prefill.campaign || autoDetectField(headers, 'campaign')) : (pending.prefill.campaign || autoDetectField(headers, 'campaign')));
     populateSelect('mappingAdgroup', headers, pending.prefill.adgroup || autoDetectField(headers, 'adgroup'));
     populateSelect('mappingKeyword', headers, pending.prefill.keyword || autoDetectField(headers, 'keyword'));
     document.getElementById('mappingFixedStart').value = pending.prefill.fixedStart || dateRange.start || '';
@@ -2721,7 +2727,8 @@ async function normalizeImportedRows() {
     const normalizedAdPlatform = normalizeAdPlatformName(rawAdPlatform || normalizedSalesPlatform);
     const forceFixedDates = isCoupangPlatformValue(normalizedAdPlatform) && !!mapping.fixedStart;
     const isTodaysHouse = isTodaysHousePlatformValue(normalizedSalesPlatform) || isTodaysHousePlatformValue(normalizedAdPlatform) || hasTodaysHouseProductColumns(state.pending.headers) || String(state.pending.fileName || '').includes('오늘의집');
-    const todaysHouseProductName = isTodaysHouse ? getTodaysHouseProductName(row) : '';
+    const todaysHouseCampaignField = isTodaysHouse ? resolveTodaysHouseCampaignField(state.pending.headers, mapping.campaign) : '';
+    const todaysHouseProductName = isTodaysHouse ? safeText(row[todaysHouseCampaignField] ?? getTodaysHouseProductName(row), '') : '';
     const todaysHouseProductId = isTodaysHouse ? getTodaysHouseProductId(row) : '';
 
     let start = '';
@@ -2766,11 +2773,17 @@ async function normalizeImportedRows() {
     if (!row.periodStart) return false;
     if (isTodaysHousePlatformValue(row.salesPlatform) || isTodaysHousePlatformValue(row.adPlatform)) {
       if (!safeText(row.todaysHouseProductId, '')) return false;
+      if (!safeText(row.todaysHouseProductName, '')) return false;
     }
     const hasMetrics = row.cost !== 0 || row.revenue !== 0 || row.impressions !== 0 || row.clicks !== 0 || row.conversions !== 0;
     const hasDimensions = [row.campaignType, row.campaign, row.adgroup, row.keyword].some(value => String(value || '').trim() && String(value).trim() !== '-');
     return hasMetrics || hasDimensions;
   });
+
+  if ((isTodaysHousePlatformValue(mapping.fixedSalesPlatform) || isTodaysHousePlatformValue(mapping.fixedAdPlatform)) && !resolveTodaysHouseCampaignField(state.pending.headers, mapping.campaign)) {
+    alert('오늘의집 파일에서는 campaign에 넣을 상품명 컬럼을 찾지 못했습니다. 상품명 컬럼이 포함된 raw data 파일인지 확인해 주세요.');
+    return;
+  }
 
   if (!normalized.length) {
     alert('가져올 수 있는 유효한 행이 없습니다. 날짜 및 지표 컬럼 매핑을 다시 확인해 주세요.');
