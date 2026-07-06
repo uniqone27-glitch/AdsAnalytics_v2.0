@@ -1532,8 +1532,50 @@ function renderSummaryTables(rows, creativeRows = rows) {
   renderSimpleTable('platformTable', summarizeGroupRows(rows, row => getResolvedRowMeta(row).adPlatform).slice(0, 50), metricColumns, 'No ad platform data found.', { defaultSort: { key: 'cost', dir: 'desc' } });
   renderSimpleTable('campaignTable', summarizeGroupRows(rows, row => row.campaign).slice(0, 50), metricColumns, 'No campaign data found.', { defaultSort: { key: 'cost', dir: 'desc' } });
   renderSimpleTable('adgroupTable', summarizeGroupRows(rows, row => row.adgroup).slice(0, 80), metricColumns, 'No ad group data found.', { defaultSort: { key: 'cost', dir: 'desc' } });
-  const keywordRows = summarizeGroupRows(creativeRows, row => row.keyword).slice(0, 100);
-  renderSimpleTable('keywordTable', keywordRows, metricColumns, 'No keyword or creative data found.', { defaultSort: { key: 'cost', dir: 'desc' } });
+
+  const keywordRows = summarizeGroupRows(creativeRows, row => {
+      const meta = getResolvedRowMeta(row);
+      return [
+        safeText(row.keyword, '-'),
+        safeText(meta.brand, '-'),
+        safeText(meta.salesPlatform, '-'),
+        safeText(meta.adPlatform, '-'),
+        safeText(row.adgroup, '-')
+      ].join('||');
+    })
+    .map(item => {
+      const [name, brand, salesPlatform, adPlatform, adgroup] = item.name.split('||');
+      return {
+        name,
+        brand,
+        salesPlatform,
+        adPlatform,
+        adgroup,
+        cost: item.cost,
+        revenue: item.revenue,
+        roas: item.roas,
+        clicks: item.clicks,
+        conversions: item.conversions,
+        cpc: item.cpc
+      };
+    })
+    .slice(0, 100);
+
+  const keywordColumns = [
+    { key: 'name', label: 'Keyword / Creative' },
+    { key: 'brand', label: 'Brand' },
+    { key: 'salesPlatform', label: 'Sales platform' },
+    { key: 'adPlatform', label: 'Ad platform' },
+    { key: 'adgroup', label: 'Ad group' },
+    { key: 'cost', label: 'Cost', render: v => formatCurrency(v), num: true },
+    { key: 'revenue', label: 'Revenue', render: v => formatCurrency(v), num: true },
+    { key: 'roas', label: 'ROAS', render: v => formatPercent(v), num: true },
+    { key: 'clicks', label: 'Clicks', render: v => formatNumber(v), num: true },
+    { key: 'conversions', label: 'Conversions', render: v => formatNumber(v), num: true },
+    { key: 'cpc', label: 'CPC', render: v => formatCurrency(v), num: true }
+  ];
+
+  renderSimpleTable('keywordTable', keywordRows, keywordColumns, 'No keyword or creative data found.', { defaultSort: { key: 'cost', dir: 'desc' } });
 }
 
 function startOfWeek(dateObj) {
