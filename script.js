@@ -1536,43 +1536,40 @@ function renderSummaryTables(rows, creativeRows = rows) {
   const keywordRows = summarizeGroupRows(creativeRows, row => {
       const meta = getResolvedRowMeta(row);
       return [
-        safeText(row.keyword, '-'),
         safeText(meta.brand, '-'),
         safeText(meta.salesPlatform, '-'),
         safeText(meta.adPlatform, '-'),
-        safeText(row.adgroup, '-')
+        safeText(row.campaign, '-'),
+        safeText(row.adgroup, '-'),
+        safeText(row.keyword, '-')
       ].join('||');
     })
     .map(item => {
-      const [name, brand, salesPlatform, adPlatform, adgroup] = item.name.split('||');
+      const [brand, salesPlatform, adPlatform, campaign, adgroup, name] = item.name.split('||');
       return {
-        name,
         brand,
         salesPlatform,
         adPlatform,
+        campaign,
         adgroup,
+        name,
         cost: item.cost,
         revenue: item.revenue,
-        roas: item.roas,
-        clicks: item.clicks,
-        conversions: item.conversions,
-        cpc: item.cpc
+        roas: item.roas
       };
     })
     .slice(0, 100);
 
   const keywordColumns = [
-    { key: 'name', label: 'Keyword / Creative' },
     { key: 'brand', label: 'Brand' },
     { key: 'salesPlatform', label: 'Sales platform' },
     { key: 'adPlatform', label: 'Ad platform' },
+    { key: 'campaign', label: 'Campaign' },
     { key: 'adgroup', label: 'Ad group' },
+    { key: 'name', label: 'Keyword / Creative' },
     { key: 'cost', label: 'Cost', render: v => formatCurrency(v), num: true },
     { key: 'revenue', label: 'Revenue', render: v => formatCurrency(v), num: true },
-    { key: 'roas', label: 'ROAS', render: v => formatPercent(v), num: true },
-    { key: 'clicks', label: 'Clicks', render: v => formatNumber(v), num: true },
-    { key: 'conversions', label: 'Conversions', render: v => formatNumber(v), num: true },
-    { key: 'cpc', label: 'CPC', render: v => formatCurrency(v), num: true }
+    { key: 'roas', label: 'ROAS', render: v => formatPercent(v), num: true }
   ];
 
   renderSimpleTable('keywordTable', keywordRows, keywordColumns, 'No keyword or creative data found.', { defaultSort: { key: 'cost', dir: 'desc' } });
