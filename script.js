@@ -1533,6 +1533,11 @@ function renderSummaryTables(rows, creativeRows = rows) {
   renderSimpleTable('campaignTable', summarizeGroupRows(rows, row => row.campaign).slice(0, 50), metricColumns, 'No campaign data found.', { defaultSort: { key: 'cost', dir: 'desc' } });
   renderSimpleTable('adgroupTable', summarizeGroupRows(rows, row => row.adgroup).slice(0, 80), metricColumns, 'No ad group data found.', { defaultSort: { key: 'cost', dir: 'desc' } });
 
+  ['brandTable', 'platformTable', 'campaignTable'].forEach(tableId => {
+    const tableElement = document.querySelector(`#${tableId} table`);
+    if (tableElement) tableElement.classList.add('report-table', 'summary-report-table');
+  });
+
   const keywordRows = summarizeGroupRows(creativeRows, row => {
       const meta = getResolvedRowMeta(row);
       return [
