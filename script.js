@@ -1555,7 +1555,10 @@ function renderSummaryTables(rows, creativeRows = rows) {
         name,
         cost: item.cost,
         revenue: item.revenue,
-        roas: item.roas
+        roas: item.roas,
+        clicks: item.clicks,
+        conversions: item.conversions,
+        cpc: item.cpc
       };
     })
     .slice(0, 100);
@@ -1569,10 +1572,15 @@ function renderSummaryTables(rows, creativeRows = rows) {
     { key: 'name', label: 'Keyword / Creative' },
     { key: 'cost', label: 'Cost', render: v => formatCurrency(v), num: true },
     { key: 'revenue', label: 'Revenue', render: v => formatCurrency(v), num: true },
-    { key: 'roas', label: 'ROAS', render: v => formatPercent(v), num: true }
+    { key: 'roas', label: 'ROAS', render: v => formatPercent(v), num: true },
+    { key: 'clicks', label: 'Clicks', render: v => formatNumber(v), num: true },
+    { key: 'conversions', label: 'Conversions', render: v => formatNumber(v), num: true },
+    { key: 'cpc', label: 'CPC', render: v => formatCurrency(v), num: true }
   ];
 
   renderSimpleTable('keywordTable', keywordRows, keywordColumns, 'No keyword or creative data found.', { defaultSort: { key: 'cost', dir: 'desc' } });
+  const keywordTableElement = document.querySelector('#keywordTable table');
+  if (keywordTableElement) keywordTableElement.classList.add('report-table', 'keyword-summary-table');
 }
 
 function startOfWeek(dateObj) {
